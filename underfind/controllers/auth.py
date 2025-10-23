@@ -11,13 +11,13 @@ class AuthController:
     def login(self, email, password) -> User | None:
         if not email or not password:
             return None
-            
+
         try:
             response = self.client.auth.sign_in_with_password({
                 "email": email,
                 "password": password,
-            })    
-            return response.user if response and response.user else None
+            })
+            return response.user
 
         except Exception:
             return None
@@ -31,6 +31,6 @@ class AuthController:
                 "password": password,
             })
             return True if response and response.user else False
-        
+
         except Exception:
             return False
