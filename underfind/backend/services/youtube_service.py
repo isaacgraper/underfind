@@ -261,8 +261,12 @@ class YouTubeService:
         try:
             logger.debug("Calling YouTube search API with parameters: %s", search_params)
             res = svc.search().list(**search_params).execute()
-            items = res.get("items", [])
-            video_ids = [item["id"]["videoId"] for item in items if "id" in item and "videoId" in item["id"]]
+            video_ids = [
+                item["id"]["videoId"]
+                for item in items
+                if "id" in item and "videoId" in item["id"]
+            ]
+
 
             logger.trace("YouTube API search response received: %d items (video IDs: %s)", len(video_ids), video_ids[:5])
 
@@ -319,7 +323,11 @@ class YouTubeService:
             raw_videos = self._process_video_items(items)
 
             if req.shorts_only:
-                raw_videos = [v for v in raw_videos if v.is_short]
+                raw_videos = [
+                    v for v in raw_videos
+                    if v.is_short
+                ]
+
 
             logger.info("Retrieved %d trending videos for region %s.", len(raw_videos), req.region_code)
             return raw_videos
