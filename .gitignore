@@ -173,3 +173,16 @@ poetry.toml
 pyrightconfig.json
 
 # End of https://www.toptal.com/developers/gitignore/api/python
+
+### Underfind Project Specific ###
+node_modules/
+**/node_modules/
+underfind/frontend/dist/
+dist/
+data/*.sqlite3
+data/*.db
+.env
+.env.local
+*.log
+.pytest_cache/
+

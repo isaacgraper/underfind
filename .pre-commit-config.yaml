@@ -1,0 +1,12 @@
+# Pre-commit configuration for Underfind
+# Runs automated pytest suite prior to git commit
+
+repos:
+  - repo: local
+    hooks:
+      - id: pytest-check
+        name: Run Automated Backend Tests (pytest)
+        entry: pytest
+        language: system
+        types: [python]
+        pass_filenames: false
