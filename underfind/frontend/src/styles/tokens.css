@@ -1,0 +1,51 @@
+/* ==============================================================================
+   Underfind Design System Tokens — Emil Kowalski Craft Architecture
+   ============================================================================== */
+
+:root {
+  /* Custom Easing Curves (Emil Kowalski Standards) */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* Refined Slate / Zinc Dark Neutrals */
+  --bg-canvas: #09090b;
+  --bg-surface: #121215;
+  --bg-surface-elevated: #18181b;
+  --bg-surface-hover: #222226;
+  --bg-input: #151518;
+
+  /* Borders */
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --border-medium: rgba(255, 255, 255, 0.12);
+  --border-focus: rgba(255, 255, 255, 0.35);
+
+  /* Typography */
+  --text-primary: #fafafa;
+  --text-secondary: #a1a1aa;
+  --text-tertiary: #71717a;
+  --text-disabled: #52525b;
+
+  /* Accent & Indicators */
+  --accent-primary: #ffffff;
+  --accent-contrast: #09090b;
+
+  --indicator-viral: #10b981;
+  --indicator-viral-bg: rgba(16, 185, 129, 0.10);
+  --indicator-viral-border: rgba(16, 185, 129, 0.25);
+
+  --indicator-blue: #3b82f6;
+  --indicator-blue-bg: rgba(59, 130, 246, 0.10);
+  --indicator-blue-border: rgba(59, 130, 246, 0.25);
+
+  --indicator-purple: #a855f7;
+  --indicator-purple-bg: rgba(168, 85, 247, 0.10);
+
+  /* Fluid Pill Radii Standards */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+  --radius-full: 9999px;
+}

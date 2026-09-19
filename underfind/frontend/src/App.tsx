@@ -1,16 +1,20 @@
 import { useState } from 'react';
-import { ActiveTab } from './types';
-import { Navbar } from './components/Navbar';
-import { DashboardView } from './components/DashboardView';
-import { ShortsOutliersView } from './components/ShortsOutliersView';
-import { TrendingView } from './components/TrendingView';
-import { AdvancedSearchView } from './components/AdvancedSearchView';
-import { McpView } from './components/McpView';
-import { VideoWorkspaceModal } from './components/VideoWorkspaceModal';
+import { ActiveTab } from '@/types';
+import { Navbar } from '@/components';
+import { useVideoModal } from '@/hooks';
+import { VideoModal } from '@/features/videos';
+import {
+  DashboardPage,
+  ViralShortsPage,
+  TrendingPage,
+  IdeasBoardPage,
+  ExplorerPage,
+  McpHubPage,
+} from '@/pages';
 
 export function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
-  const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
+  const { selectedVideoId, isModalOpen, openVideoModal, closeVideoModal } = useVideoModal();
   const [initialSearchQuery, setInitialSearchQuery] = useState<string>('');
 
   const handleDashboardSearch = (query: string) => {
@@ -24,31 +28,33 @@ export function App() {
 
       <main>
         {activeTab === 'dashboard' && (
-          <DashboardView
-            onVideoClick={setSelectedVideoId}
+          <DashboardPage
+            onVideoClick={openVideoModal}
             onSearchSubmit={handleDashboardSearch}
           />
         )}
         {activeTab === 'shorts' && (
-          <ShortsOutliersView
+          <ViralShortsPage
             initialQuery={initialSearchQuery}
-            onVideoClick={setSelectedVideoId}
+            onVideoClick={openVideoModal}
           />
         )}
         {activeTab === 'trending' && (
-          <TrendingView onVideoClick={setSelectedVideoId} />
+          <TrendingPage onVideoClick={openVideoModal} />
+        )}
+        {activeTab === 'ideas' && (
+          <IdeasBoardPage onVideoClick={openVideoModal} />
         )}
         {activeTab === 'search' && (
-          <AdvancedSearchView onVideoClick={setSelectedVideoId} />
+          <ExplorerPage onVideoClick={openVideoModal} />
         )}
-        {activeTab === 'mcp' && (
-          <McpView />
-        )}
+        {activeTab === 'mcp' && <McpHubPage />}
       </main>
 
-      <VideoWorkspaceModal
+      <VideoModal
+        isOpen={isModalOpen}
         videoId={selectedVideoId}
-        onClose={() => setSelectedVideoId(null)}
+        onClose={closeVideoModal}
       />
     </>
   );

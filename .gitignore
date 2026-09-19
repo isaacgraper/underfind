@@ -185,4 +185,5 @@ data/*.db
 .env.local
 *.log
 .pytest_cache/
+*.tsbuildinfo
 

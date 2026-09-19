@@ -261,12 +261,13 @@ class YouTubeService:
         try:
             logger.debug("Calling YouTube search API with parameters: %s", search_params)
             res = svc.search().list(**search_params).execute()
+            items = res.get("items", [])
+
             video_ids = [
                 item["id"]["videoId"]
                 for item in items
                 if "id" in item and "videoId" in item["id"]
             ]
-
 
             logger.trace("YouTube API search response received: %d items (video IDs: %s)", len(video_ids), video_ids[:5])
 

@@ -73,3 +73,21 @@ def get_shorts_outliers(
     except Exception as e:
         logger.error("Error in API /api/shorts/outliers: %s", e)
         raise HTTPException(status_code=500, detail=f"Outliers query failed: {str(e)}")
+
+
+@router.get("/video/{video_id}", response_model=VideoItem)
+def get_video_details(
+    video_id: str,
+    svc: YouTubeService = Depends(get_youtube_service),
+) -> VideoItem:
+    """Retrieves full metadata for a single video including views, likes, comments, tags, and description."""
+    logger.debug("API /api/video/%s requested", video_id)
+
+    video = svc.get_video_by_id(video_id)
+
+    if not video:
+        logger.warning("API video %s not found", video_id)
+        raise HTTPException(status_code=404, detail=f"Video with ID '{video_id}' not found.")
+
+    logger.trace("API returning video %s metadata", video_id)
+    return video
