@@ -20,7 +20,7 @@ from underfind.backend.pipeline.ocr import OnScreenTextDetector
 from underfind.backend.pipeline.phash import dhash
 from underfind.backend.pipeline.subtitles import build_cues, write_ass, write_srt
 from underfind.backend.pipeline.transcribe import WhisperTranscriber
-from underfind.backend.pipeline.translate import ClaudeTranslator, SegmentInput, TranslationDraft, TranslationInput, segment_budget
+from underfind.backend.pipeline.translate import LLMTranslator, SegmentInput, TranslationDraft, TranslationInput, segment_budget
 from underfind.backend.schemas.pipeline import (
     Job,
     PageProfile,
@@ -53,7 +53,7 @@ class StageContext:
     downloader: YtDlpDownloader = field(default_factory=YtDlpDownloader)
     transcriber: WhisperTranscriber = field(default_factory=WhisperTranscriber)
     ocr: Optional[OnScreenTextDetector] = field(default_factory=OnScreenTextDetector)
-    translator: ClaudeTranslator = field(default_factory=ClaudeTranslator)
+    translator: LLMTranslator = field(default_factory=LLMTranslator)
     tts: TtsProvider = field(default_factory=EdgeTtsProvider)
 
 

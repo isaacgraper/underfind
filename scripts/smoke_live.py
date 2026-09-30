@@ -1,7 +1,7 @@
 """
 Live end-to-end check of the localization pipeline against real services.
 
-Runs one real video through download (yt-dlp) -> transcribe (faster-whisper) -> translate (Claude API)
+Runs one real video through download (yt-dlp) -> transcribe (faster-whisper) -> translate (free LLM chain: NVIDIA -> Atria -> OpenRouter)
 -> voice (subtitles, plus edge-tts in dub mode) in an isolated temp database and workspace,
 so it never touches data/cache.sqlite3.
 
@@ -10,7 +10,8 @@ Usage:
     python scripts/smoke_live.py https://www.youtube.com/shorts/<id> --language pt-BR --mode dub
 
 Needs: network access to the video platform, huggingface.co (first Whisper model download),
-api.anthropic.com (ANTHROPIC_API_KEY or another SDK credential) and, for dub mode, speech.platform.bing.com.
+at least one LLM provider key (NVIDIA_API_KEY, ATRIA_API_KEY, OPENROUTER_API_KEY) and, for dub mode,
+speech.platform.bing.com.
 """
 from __future__ import annotations
 
@@ -29,7 +30,9 @@ HOSTS = {
     "Instagram": "www.instagram.com",
     "TikTok": "www.tiktok.com",
     "Whisper models (Hugging Face)": "huggingface.co",
-    "Claude API": "api.anthropic.com",
+    "NVIDIA API catalog": "integrate.api.nvidia.com",
+    "Atria": "api.atria-asi.ai",
+    "OpenRouter": "openrouter.ai",
     "edge-tts": "speech.platform.bing.com",
 }
 

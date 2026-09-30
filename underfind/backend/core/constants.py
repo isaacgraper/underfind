@@ -109,10 +109,8 @@ OCR_SAMPLE_FRAMES: int = 6
 OCR_MIN_CONFIDENCE: float = 0.6
 OCR_MIN_TEXT_LENGTH: int = 3
 
-# Translation (Claude API)
-DEFAULT_TRANSLATION_MODEL: str = "claude-opus-5-5"
-DEFAULT_TRANSLATION_EFFORT: str = "medium"
-TRANSLATION_MAX_TOKENS: int = 16000
+# Translation (LLM gateway role in config/llm.yaml; free providers by default)
+TRANSLATOR_ROLE: str = "translator"
 # Characters per second a viewer can read (subtitles) or a TTS voice can speak (dub) comfortably.
 SUBTITLE_CHARS_PER_SECOND: float = 17.0
 DUB_CHARS_PER_SECOND: float = 14.0

@@ -18,7 +18,6 @@ from underfind.backend.pipeline.runner import PipelineRunner
 from underfind.backend.pipeline.stages import StageContext, Workspace
 from underfind.backend.pipeline.subtitles import build_cues, max_line_chars, wrap_words, write_ass, write_srt
 from underfind.backend.pipeline.translate import (
-    ClaudeTranslator,
     SegmentInput,
     TranslationDraft,
     TranslationInput,
@@ -219,56 +218,6 @@ def test_mix_dub_matches_video_length(tmp_path: Path, clip: Path):
 
     out = mix_dub(clip, clips, 6.0, tmp_path / "dub.wav", background_volume=0.1)
     assert probe_duration(out) == pytest.approx(6.0, abs=0.1)
-
-
-# ------------------------------------------------------------- translator
-
-
-class _FakeMessages:
-    def __init__(self, response):
-        self.response = response
-        self.kwargs = None
-
-    def parse(self, **kwargs):
-        self.kwargs = kwargs
-        return self.response
-
-
-def _claude(response) -> tuple[ClaudeTranslator, _FakeMessages]:
-    messages = _FakeMessages(response)
-    return ClaudeTranslator(client=SimpleNamespace(messages=messages), model="claude-opus-5-5", effort="medium"), messages
-
-
-def _req() -> TranslationInput:
-    return TranslationInput(
-        target_language="pt-BR",
-        source_language="en",
-        mode="subtitles",
-        segments=[SegmentInput(index=0, start=0, end=2, text="Hello Vice City", max_chars=34)],
-        glossary=["Vice City"],
-    )
-
-
-def test_claude_translator_request_shape():
-    draft = TranslationDraft(segments=[{"index": 0, "text": "Fala, Vice City"}], caption="c", hashtags=["#gta6"])
-    translator, messages = _claude(SimpleNamespace(stop_reason="end_turn", parsed_output=draft))
-
-    assert translator.translate(_req()) is draft
-    assert messages.kwargs["model"] == "claude-opus-5-5"
-    assert messages.kwargs["output_format"] is TranslationDraft
-    assert messages.kwargs["output_config"] == {"effort": "medium"}
-    assert '"max_chars": 34' in messages.kwargs["messages"][0]["content"]
-    assert "Vice City" in messages.kwargs["messages"][0]["content"]
-
-
-def test_claude_translator_refusal_is_permanent_and_truncation_retryable():
-    refused, _ = _claude(SimpleNamespace(stop_reason="refusal", parsed_output=None))
-    with pytest.raises(PermanentStageError):
-        refused.translate(_req())
-
-    truncated, _ = _claude(SimpleNamespace(stop_reason="max_tokens", parsed_output=None))
-    with pytest.raises(RuntimeError):
-        truncated.translate(_req())
 
 
 # --------------------------------------------------------- pipeline stages

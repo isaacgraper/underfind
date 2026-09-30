@@ -19,7 +19,7 @@ Find international GTA VI reels/shorts, translate them into each target page's l
 | 3 | **Download** | URL → `source.mp4`, audio, metadata, perceptual hash | yt-dlp, ffmpeg | `downloaded` | 3 (done) |
 | 4 | **Transcribe** | audio → timestamped transcript + language, on-screen text flag | faster-whisper, OCR sampling | `transcribed` | 3 (done) |
 | 5 | **Assign page** | job → target page(s) | page profiles | (page set) | done |
-| 6 | **Translate** | transcript → timing-fit translated segments + localized caption/hashtags | LLM + GTA VI glossary (Lucia, Jason, Vice City, Leonida stay untranslated) | `translated` | 4 (done) |
+| 6 | **Translate** | transcript → timing-fit translated segments + localized caption/hashtags | free LLM chain (NVIDIA → Atria → OpenRouter) + GTA VI glossary (Lucia, Jason, Vice City, Leonida stay untranslated) | `translated` | 4 (done) |
 | 7 | **Voice** | translation → burned subtitles or dubbed track | ASS subtitles / TTS | `voiced` | 4 (done) |
 | 8 | **Render** | video + page identity → 1080×1920 final | ffmpeg + Pillow (avatar, name, @ on top, video below) | `rendered` | 5 |
 | 9 | **Export** | final → `final.mp4` + `manifest.json` in the export folder | file drop or publisher API | `exported` | 6 |
@@ -136,10 +136,10 @@ Built and covered by automated tests (real ffmpeg on generated clips; mocked net
 |---|---|---|
 | Download | yt-dlp | www.youtube.com, www.instagram.com, www.tiktok.com |
 | Transcribe | faster-whisper model download | huggingface.co |
-| Translate | Claude API | reachable, but no credential configured |
+| Translate | LLM gateway (NVIDIA → Atria → OpenRouter) | integrate.api.nvidia.com, api.atria-asi.ai, openrouter.ai |
 | Dub | edge-tts | speech.platform.bing.com |
 
-To verify on a machine with open network access and `ANTHROPIC_API_KEY` set:
+To verify on a machine with open network access and at least one of `NVIDIA_API_KEY`, `ATRIA_API_KEY`, `OPENROUTER_API_KEY` set:
 
 ```bash
 python scripts/smoke_live.py --check
@@ -148,3 +148,16 @@ python scripts/smoke_live.py "https://www.instagram.com/reel/<code>/" --language
 ```
 
 The script uses its own temp database and workspace (never `data/cache.sqlite3`), auto-approves the translation, and prints status, events, artifacts, caption and the first translated lines. Things to check by hand: Instagram/TikTok need `YTDLP_COOKIES_FILE`; Whisper model size vs CPU speed (`WHISPER_MODEL`); dub timing in `data/smoke/jobs/<id>/dub.json` (speedups near 1.35x mean the translation is still too long).
+
+## 5. AI model usage
+
+Free models are the default; paid models are opt-in per role. `config/llm.yaml` maps each role to a provider and model chain:
+
+| Role | Provider | Models | Free limit |
+|---|---|---|---|
+| `translator` | NVIDIA API catalog | `moonshotai/kimi-k3`, then `nvidia/nemotron-3.5-lightning-30b-a3b` | 40 req/min (throttled to 38) |
+| `translator_atria` | Atria | `Atria-Dawn-Preview` | 100M tokens |
+| `translator_openrouter` | OpenRouter | a `:free` model | ~50 req/day without credits |
+| `translator_claude` | Anthropic (paid, opt-in) | `claude-opus-5-5` | — |
+
+Fallback: a rate-limited or declining model moves to the next model in the role; a provider without a key, returning 5xx or unreachable moves to the next fallback role. If no provider has a key, the job fails with a message saying so; if all are rate-limited or down, the worker retries with backoff. Each translation records which provider/model served it (`translation.json` → `model`).

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import threading
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
@@ -9,9 +8,7 @@ from typing import Any, List, Optional
 from pydantic import BaseModel, Field
 
 from underfind.backend.core.constants import (
-    DEFAULT_TRANSLATION_MODEL,
-    DEFAULT_TRANSLATION_EFFORT,
-    TRANSLATION_MAX_TOKENS,
+    TRANSLATOR_ROLE,
     SUBTITLE_CHARS_PER_SECOND,
     DUB_CHARS_PER_SECOND,
     MIN_SEGMENT_CHARS,
@@ -88,53 +85,42 @@ def segment_budget(
     return max(MIN_SEGMENT_CHARS, int((end - start) * rate))
 
 
-class ClaudeTranslator:
+class LLMTranslator:
     """
-    Translates a transcript with the Claude API into validated structured output.
-    Env: ANTHROPIC_API_KEY (or another SDK credential source), TRANSLATION_MODEL, TRANSLATION_EFFORT.
+    Translates a transcript through the LLM gateway role `translator` (free providers by default:
+    NVIDIA -> Atria -> OpenRouter, see config/llm.yaml). Output is JSON validated against TranslationDraft.
     """
 
     def __init__(
         self,
-        client: Any = None,
-        model: Optional[str] = None,
-        effort: Optional[str] = None,
+        gateway: Any = None,
+        role: str = TRANSLATOR_ROLE,
     ):
-        self._client = client
+        self._gateway = gateway
         self._lock = threading.Lock()
-        self.model = model or os.environ.get("TRANSLATION_MODEL", DEFAULT_TRANSLATION_MODEL)
-        self.effort = effort or os.environ.get("TRANSLATION_EFFORT", DEFAULT_TRANSLATION_EFFORT)
+        self.role = role
+        self.model: Optional[str] = None
 
-    def _get_client(self) -> Any:
+    def _get_gateway(self) -> Any:
         with self._lock:
-            if self._client is None:
-                import anthropic
-                self._client = anthropic.Anthropic()
+            if self._gateway is None:
+                from underfind.backend.llm.gateway import get_gateway
+                self._gateway = get_gateway()
 
-            return self._client
+            return self._gateway
 
-    def _parse(self, user_content: str, output_format: type[BaseModel]) -> BaseModel:
-        import anthropic
+    def _structured(self, user_content: str, schema: type[BaseModel]) -> BaseModel:
+        from underfind.backend.llm.types import NoProviderConfigured, StructuredOutputError
 
         try:
-            response = self._get_client().messages.parse(
-                model=self.model,
-                max_tokens=TRANSLATION_MAX_TOKENS,
-                system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-                messages=[{"role": "user", "content": user_content}],
-                output_config={"effort": self.effort},
-                output_format=output_format,
-            )
-        except (anthropic.BadRequestError, anthropic.AuthenticationError, anthropic.PermissionDeniedError, anthropic.NotFoundError) as err:
-            raise PermanentStageError(f"Translation request rejected: {err}") from err
+            parsed, completion = self._get_gateway().generate_structured(self.role, user_content, schema, system=SYSTEM_PROMPT)
+        except NoProviderConfigured as err:
+            raise PermanentStageError(f"Translation not possible: {err}") from err
+        except StructuredOutputError as err:
+            raise RuntimeError(str(err)) from err
 
-        if response.stop_reason == "refusal":
-            raise PermanentStageError("Translation refused by the model's safety classifiers.")
-
-        if response.stop_reason == "max_tokens" or response.parsed_output is None:
-            raise RuntimeError(f"Translation output incomplete (stop_reason={response.stop_reason}).")
-
-        return response.parsed_output
+        self.model = f"{completion.provider}/{completion.model}"
+        return parsed
 
     def translate(self, req: TranslationInput) -> TranslationDraft:
         payload = {
@@ -149,8 +135,8 @@ class ClaudeTranslator:
             "original_caption": req.source_caption or "",
             "onscreen_text": req.onscreen_text,
         }
-        logger.debug("Translating %d segments to %s with %s", len(req.segments), req.target_language, self.model)
-        return self._parse(json.dumps(payload, ensure_ascii=False, indent=1), TranslationDraft)
+        logger.debug("Translating %d segments to %s via role '%s'", len(req.segments), req.target_language, self.role)
+        return self._structured(json.dumps(payload, ensure_ascii=False, indent=1), TranslationDraft)
 
     def shorten(
         self,
@@ -164,4 +150,4 @@ class ClaudeTranslator:
             "glossary": glossary,
             "segments": [{"index": s.index, "max_chars": s.max_chars, "text": s.text} for s in segments],
         }
-        return self._parse(json.dumps(payload, ensure_ascii=False, indent=1), _ShortenedSegments).segments
+        return self._structured(json.dumps(payload, ensure_ascii=False, indent=1), _ShortenedSegments).segments

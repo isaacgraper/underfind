@@ -1,0 +1,30 @@
+# LLM roles -> provider/model chains. Free providers by default; code asks for a role, never a model.
+#   translator           NVIDIA API catalog (free, 40 req/min): Kimi K3, then Nemotron 3.5 Lightning
+#   translator_atria     Atria-Dawn-Preview (Shanghai AI Lab; free tier: 100M tokens)
+#   translator_openrouter  OpenRouter free model (~50 req/day without credits)
+# A rate-limited or declining model falls to the next model; a missing key, server error or exhausted
+# chain falls to the next fallback role. Override a role's primary model with UNDERFIND_<ROLE>_MODEL.
+# Paid Claude is opt-in: point translator.fallback_roles (or UNDERFIND_TRANSLATOR_*) at translator_claude.
+roles:
+  translator:
+    provider: nvidia
+    model: moonshotai/kimi-k3
+    fallback_models: [nvidia/nemotron-3.5-lightning-30b-a3b]
+    max_tokens: 8000
+    temperature: 0.4
+    fallback_roles: [translator_atria, translator_openrouter]
+  translator_atria:
+    provider: atria
+    model: Atria-Dawn-Preview
+    max_tokens: 8000
+    temperature: 0.4
+  translator_openrouter:
+    provider: openrouter
+    model: "cognitivecomputations/dolphin-mistral-24b-venice-edition:free"
+    max_tokens: 6000
+    temperature: 0.4
+  translator_claude:
+    provider: anthropic
+    model: claude-opus-5-5
+    max_tokens: 16000
+    extra: {output_config: {effort: medium}}
