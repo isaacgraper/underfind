@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from PIL import Image
 
-from underfind.backend.core.constants import BUDGET_TOLERANCE, JOBS_DIR, SOURCES_DIR, PHASH_FRAME_SECONDS
+from underfind.backend.core.constants import DEFAULT_TRANSLATION_BACKEND, BUDGET_TOLERANCE, JOBS_DIR, SOURCES_DIR, PHASH_FRAME_SECONDS
 from underfind.backend.core.errors import DuplicateSourceError, PermanentStageError
 from underfind.backend.core.logger import logger
 from underfind.backend.db.pipeline_repo import PipelineRepository
 from underfind.backend.pipeline.download import YtDlpDownloader, source_updates_from_info
-from underfind.backend.pipeline.dub import EdgeTtsProvider, TtsProvider, default_voice, mix_dub, synthesize_segments
+from underfind.backend.pipeline.dub import TtsProvider, build_tts, default_voice, mix_dub, synthesize_segments
 from underfind.backend.pipeline.glossary import load_glossary
 from underfind.backend.pipeline.media import extract_audio, extract_frame, has_audio_stream, probe_duration
 from underfind.backend.pipeline.ocr import OnScreenTextDetector
@@ -30,6 +31,17 @@ from underfind.backend.schemas.pipeline import (
     TranslatedSegment,
     Translation,
 )
+
+
+def build_translator() -> Any:
+    """TRANSLATION_BACKEND=local (offline OPUS-MT, default) or llm (LLM gateway, opt-in)."""
+    backend = os.environ.get("TRANSLATION_BACKEND", DEFAULT_TRANSLATION_BACKEND).lower()
+
+    if backend == "llm":
+        return LLMTranslator()
+
+    from underfind.backend.pipeline.local_translate import LocalTranslator
+    return LocalTranslator()
 
 
 @dataclass
@@ -53,8 +65,8 @@ class StageContext:
     downloader: YtDlpDownloader = field(default_factory=YtDlpDownloader)
     transcriber: WhisperTranscriber = field(default_factory=WhisperTranscriber)
     ocr: Optional[OnScreenTextDetector] = field(default_factory=OnScreenTextDetector)
-    translator: LLMTranslator = field(default_factory=LLMTranslator)
-    tts: TtsProvider = field(default_factory=EdgeTtsProvider)
+    translator: Any = field(default_factory=lambda: build_translator())
+    tts: TtsProvider = field(default_factory=build_tts)
 
 
 def _require_source(job: Job) -> None:
@@ -312,7 +324,7 @@ def voice_stage(
     if not video_duration:
         raise PermanentStageError(f"Source video missing or unreadable at {video_path}.")
 
-    voice = page.tts_voice or default_voice(page.language)
+    voice = page.tts_voice or default_voice(page.language, getattr(ctx.tts, "voices", None))
     clips = synthesize_segments(translation.segments, voice, ctx.tts, job_dir / "dub_clips", video_duration)
     audio_path = mix_dub(video_path, clips, video_duration, job_dir / "dub_audio.wav")
 

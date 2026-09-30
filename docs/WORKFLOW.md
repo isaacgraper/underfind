@@ -7,7 +7,7 @@ Find international GTA VI reels/shorts, translate them into each target page's l
 ```
  SOURCE ──► FILTER ──► DOWNLOAD ──► TRANSCRIBE ──► TRANSLATE ──► VOICE ──► RENDER ──► EXPORT ──► PUBLISH
    │          │            │             │              │           │          │          │          │
- find GTA   score +     yt-dlp        Whisper        LLM +       subtitles  ffmpeg     manifest   batch
+ find GTA   score +     yt-dlp        Whisper       OPUS-MT +     subtitles  ffmpeg     manifest   batch
  VI videos  dedup                                   glossary     or dub     template   + mp4      publisher
                                                    ▲ REVIEW                ▲ REVIEW
 ```
@@ -19,8 +19,8 @@ Find international GTA VI reels/shorts, translate them into each target page's l
 | 3 | **Download** | URL → `source.mp4`, audio, metadata, perceptual hash | yt-dlp, ffmpeg | `downloaded` | 3 (done) |
 | 4 | **Transcribe** | audio → timestamped transcript + language, on-screen text flag | faster-whisper, OCR sampling | `transcribed` | 3 (done) |
 | 5 | **Assign page** | job → target page(s) | page profiles | (page set) | done |
-| 6 | **Translate** | transcript → timing-fit translated segments + localized caption/hashtags | free LLM chain (NVIDIA → Atria → OpenRouter) + GTA VI glossary (Lucia, Jason, Vice City, Leonida stay untranslated) | `translated` | 4 (done) |
-| 7 | **Voice** | translation → burned subtitles or dubbed track | ASS subtitles / TTS | `voiced` | 4 (done) |
+| 6 | **Translate** | transcript → timing-fit translated segments + localized caption/hashtags | local OPUS-MT on CTranslate2 (optional: LLM chain) + GTA VI glossary (Lucia, Jason, Vice City, Leonida stay untranslated) | `translated` | 4 (done) |
+| 7 | **Voice** | translation → burned subtitles or dubbed track | ASS subtitles / Piper TTS (local) | `voiced` | 4 (done) |
 | 8 | **Render** | video + page identity → 1080×1920 final | ffmpeg + Pillow (avatar, name, @ on top, video below) | `rendered` | 5 |
 | 9 | **Export** | final → `final.mp4` + `manifest.json` in the export folder | file drop or publisher API | `exported` | 6 |
 | 10 | **Publish** | manifest → post | batch publisher (external) | — | external |
@@ -136,10 +136,10 @@ Built and covered by automated tests (real ffmpeg on generated clips; mocked net
 |---|---|---|
 | Download | yt-dlp | www.youtube.com, www.instagram.com, www.tiktok.com |
 | Transcribe | faster-whisper model download | huggingface.co |
-| Translate | LLM gateway (NVIDIA → Atria → OpenRouter) | integrate.api.nvidia.com, api.atria-asi.ai, openrouter.ai |
-| Dub | edge-tts | speech.platform.bing.com |
+| Translate | local OPUS-MT model download (once) | argos-net.com (index on raw.githubusercontent.com is reachable) |
+| Dub | Piper voice download (once) | huggingface.co |
 
-To verify on a machine with open network access and at least one of `NVIDIA_API_KEY`, `ATRIA_API_KEY`, `OPENROUTER_API_KEY` set:
+To verify on a machine with open network access (no API keys needed):
 
 ```bash
 python scripts/smoke_live.py --check
@@ -149,15 +149,19 @@ python scripts/smoke_live.py "https://www.instagram.com/reel/<code>/" --language
 
 The script uses its own temp database and workspace (never `data/cache.sqlite3`), auto-approves the translation, and prints status, events, artifacts, caption and the first translated lines. Things to check by hand: Instagram/TikTok need `YTDLP_COOKIES_FILE`; Whisper model size vs CPU speed (`WHISPER_MODEL`); dub timing in `data/smoke/jobs/<id>/dub.json` (speedups near 1.35x mean the translation is still too long).
 
-## 5. AI model usage
+## 5. AI model usage: local only
 
-Free models are the default; paid models are opt-in per role. `config/llm.yaml` maps each role to a provider and model chain:
+Every AI step runs on the local CPU with no API, no key and no usage limits. Models download once into `data/models/` (or ahead of time with `python app.py models`), after which the pipeline runs offline.
 
-| Role | Provider | Models | Free limit |
+| Step | Model | Runtime | Size / speed |
 |---|---|---|---|
-| `translator` | NVIDIA API catalog | `moonshotai/kimi-k3`, then `nvidia/nemotron-3.5-lightning-30b-a3b` | 40 req/min (throttled to 38) |
-| `translator_atria` | Atria | `Atria-Dawn-Preview` | 100M tokens |
-| `translator_openrouter` | OpenRouter | a `:free` model | ~50 req/day without credits |
-| `translator_claude` | Anthropic (paid, opt-in) | `claude-opus-5-5` | — |
+| Transcribe | Whisper (`WHISPER_MODEL`, default `small`) | faster-whisper (CTranslate2, int8) | ~0.5 GB; roughly real-time or faster on CPU |
+| Translate | OPUS-MT (Marian, same family as Firefox's offline translation) per language pair, from the Argos Translate index | CTranslate2 int8 + SentencePiece | ~100 MB per pair; milliseconds per line |
+| Dub voice | Piper (`pt_BR-faber-medium`, `es_MX-ald-medium`, ...) | ONNX Runtime | ~60 MB per voice; faster than real-time |
+| On-screen text (optional) | RapidOCR | ONNX Runtime | small |
 
-Fallback: a rate-limited or declining model moves to the next model in the role; a provider without a key, returning 5xx or unreachable moves to the next fallback role. If no provider has a key, the job fails with a message saying so; if all are rate-limited or down, the worker retries with backoff. Each translation records which provider/model served it (`translation.json` → `model`).
+Translation details: `pt-BR` pages use the Brazilian `pb` model when published, then `pt`; pairs without a direct model pivot through English (es→en→pt); glossary terms are masked so the model copies them verbatim; same-language sources pass through untouched.
+
+Limits of local translation versus an LLM: literal phrasing (less slang adaptation), no condensing of lines that overrun their time slot (subtitles wrap to 2 lines, dubs speed up to 1.35×), and the post caption is translated rather than rewritten. The review gate is where these get fixed by hand.
+
+Opt-in online backends, never used unless configured: `TRANSLATION_BACKEND=llm` (free LLM chain NVIDIA → Atria → OpenRouter in `config/llm.yaml`, Claude only as an explicit role) and `TTS_BACKEND=edge` (edge-tts).

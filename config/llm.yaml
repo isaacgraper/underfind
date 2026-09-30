@@ -1,3 +1,4 @@
+# OPT-IN ONLY: used when TRANSLATION_BACKEND=llm. The default pipeline is fully local (docs/WORKFLOW.md §5).
 # LLM roles -> provider/model chains. Free providers by default; code asks for a role, never a model.
 #   translator           NVIDIA API catalog (free, 40 req/min): Kimi K3, then Nemotron 3.5 Lightning
 #   translator_atria     Atria-Dawn-Preview (Shanghai AI Lab; free tier: 100M tokens)

@@ -222,6 +222,24 @@ def cmd_run(args: argparse.Namespace) -> None:
     console.print(f"Job [bold]{job.id}[/] -> [bold {style}]{job.status.value}[/]" + (f"  {job.error}" if job.error else ""))
 
 
+def cmd_models(args: argparse.Namespace) -> None:
+    """Pre-downloads local translation models and Piper voices so the pipeline runs fully offline afterwards."""
+    from underfind.backend.pipeline.dub import PiperTtsProvider
+    from underfind.backend.pipeline.local_translate import ModelStore
+
+    store = ModelStore(auto_download=True)
+
+    for pair in args.translate or []:
+        source, _, target = pair.partition(":")
+        path = store.pair_dir(source, target) if store.pair_dir(source, target).exists() else store.download(source, target)
+        console.print(f"[#10b981]translation[/] {source}->{target}: {path}")
+
+    voices = PiperTtsProvider(auto_download=True)
+
+    for name in args.voice or []:
+        console.print(f"[#10b981]voice[/] {name}: {voices.ensure_voice(name)}")
+
+
 DISPATCH: Dict[str, Callable[[argparse.Namespace], None]] = {
     "search": cmd_search,
     "trending": cmd_trending,
@@ -229,6 +247,7 @@ DISPATCH: Dict[str, Callable[[argparse.Namespace], None]] = {
     "serve": cmd_serve,
     "worker": cmd_worker,
     "run": cmd_run,
+    "models": cmd_models,
 }
 
 
@@ -269,6 +288,10 @@ def main():
     p_run = subparsers.add_parser("run", help="Advance one localization job through its automated stages")
     p_run.add_argument("job_id", help="Job ID")
     p_run.add_argument("--once", action="store_true", help="Run only the next stage")
+
+    p_models = subparsers.add_parser("models", help="Download local translation models and Piper voices for offline use")
+    p_models.add_argument("--translate", nargs="*", metavar="FROM:TO", help="Language pairs, e.g. en:pb es:en en:es")
+    p_models.add_argument("--voice", nargs="*", metavar="NAME", help="Piper voices, e.g. pt_BR-faber-medium es_MX-ald-medium")
 
     args = parser.parse_args()
 

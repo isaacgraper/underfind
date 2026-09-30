@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Protocol
 
+import requests
+
 from underfind.backend.core.constants import (
+    DEFAULT_TTS_BACKEND,
     DEFAULT_TTS_VOICES,
+    EDGE_TTS_VOICES,
+    PIPER_VOICES_URL,
+    TTS_MODELS_DIR,
     DUB_MAX_SPEEDUP,
     DUB_BACKGROUND_VOLUME,
     DUB_SAMPLE_RATE,
@@ -19,12 +27,90 @@ from underfind.backend.schemas.pipeline import TranslatedSegment
 
 
 class TtsProvider(Protocol):
+    extension: str
+    voices: dict
+
     def synthesize(self, text: str, voice: str, out_path: Path) -> Path:
         ...
 
 
+class PiperTtsProvider:
+    """
+    Local neural TTS (Piper, ONNX on CPU): no API, no key, no limits. Voices live in data/models/tts as
+    {name}.onnx + {name}.onnx.json and are downloaded once from the public voice repository on first use
+    (disable with LOCAL_MODELS_AUTO_DOWNLOAD=false and install voices by hand).
+    """
+
+    extension = ".wav"
+    voices = DEFAULT_TTS_VOICES
+
+    def __init__(
+        self,
+        voices_dir: Path = TTS_MODELS_DIR,
+        fetch=lambda url: requests.get(url, timeout=300).content,
+        loader=None,
+        auto_download: Optional[bool] = None,
+    ):
+        self.voices_dir = voices_dir
+        self.fetch = fetch
+        self.loader = loader
+        self.auto_download = auto_download if auto_download is not None else os.environ.get("LOCAL_MODELS_AUTO_DOWNLOAD", "true").lower() != "false"
+        self._loaded: dict = {}
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def voice_url(name: str) -> str:
+        """'pt_BR-faber-medium' -> {repo}/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx"""
+        locale, speaker, quality = name.split("-", 2)
+        return f"{os.environ.get('PIPER_VOICES_URL', PIPER_VOICES_URL)}/{locale.split('_')[0]}/{locale}/{speaker}/{quality}/{name}.onnx"
+
+    def ensure_voice(self, name: str) -> Path:
+        model = self.voices_dir / f"{name}.onnx"
+        config = self.voices_dir / f"{name}.onnx.json"
+
+        if model.exists() and config.exists():
+            return model
+
+        if not self.auto_download:
+            raise PermanentStageError(f"Piper voice {name} not installed in {self.voices_dir}")
+
+        self.voices_dir.mkdir(parents=True, exist_ok=True)
+        url = self.voice_url(name)
+        logger.info("Downloading Piper voice %s", name)
+        model.write_bytes(self.fetch(url))
+        config.write_bytes(self.fetch(url + ".json"))
+        return model
+
+    def _voice(self, name: str):
+        with self._lock:
+            if name not in self._loaded:
+                path = self.ensure_voice(name)
+
+                if self.loader is not None:
+                    self._loaded[name] = self.loader(path)
+                else:
+                    from piper import PiperVoice
+                    self._loaded[name] = PiperVoice.load(path)
+
+            return self._loaded[name]
+
+    def synthesize(self, text: str, voice: str, out_path: Path) -> Path:
+        engine = self._voice(voice)
+
+        with wave.open(str(out_path), "wb") as wav_file:
+            engine.synthesize_wav(text, wav_file)
+
+        if out_path.stat().st_size <= 44:
+            raise RuntimeError(f"Piper produced no audio for voice {voice}")
+
+        return out_path
+
+
 class EdgeTtsProvider:
-    """Free neural voices via Microsoft Edge's online TTS (edge-tts package). Needs network access to speech.platform.bing.com."""
+    """Opt-in online TTS via Microsoft Edge (edge-tts package). Needs network access to speech.platform.bing.com."""
+
+    extension = ".mp3"
+    voices = EDGE_TTS_VOICES
 
     def __init__(self, proxy: Optional[str] = None):
         self.proxy = proxy or os.environ.get("TTS_PROXY") or None
@@ -43,15 +129,23 @@ class EdgeTtsProvider:
         return out_path
 
 
-def default_voice(language: str) -> str:
+def build_tts() -> TtsProvider:
+    """TTS_BACKEND=piper (local, default) or edge (online, opt-in)."""
+    backend = os.environ.get("TTS_BACKEND", DEFAULT_TTS_BACKEND).lower()
+    return EdgeTtsProvider() if backend == "edge" else PiperTtsProvider()
+
+
+def default_voice(language: str, voices: Optional[dict] = None) -> str:
     """Voice for a page language: exact tag first (pt-BR), then base language (pt)."""
-    if language in DEFAULT_TTS_VOICES:
-        return DEFAULT_TTS_VOICES[language]
+    table = voices if voices is not None else DEFAULT_TTS_VOICES
+
+    if language in table:
+        return table[language]
 
     base = language.split("-")[0]
 
-    if base in DEFAULT_TTS_VOICES:
-        return DEFAULT_TTS_VOICES[base]
+    if base in table:
+        return table[base]
 
     raise PermanentStageError(f"No default TTS voice for language '{language}'; set tts_voice on the page profile.")
 
@@ -105,7 +199,7 @@ def synthesize_segments(
     for i, seg in enumerate(spoken):
         next_start = spoken[i + 1].start if i + 1 < len(spoken) else video_duration
         slot = max(0.1, next_start - seg.start)
-        raw = tts.synthesize(seg.text, voice, work_dir / f"seg_{seg.index:03d}.mp3")
+        raw = tts.synthesize(seg.text, voice, work_dir / f"seg_{seg.index:03d}.raw{getattr(tts, 'extension', '.mp3')}")
         fitted, duration, speedup = fit_clip(raw, slot, work_dir / f"seg_{seg.index:03d}.wav")
 
         if duration > slot + 0.05:

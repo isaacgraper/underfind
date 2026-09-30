@@ -109,8 +109,16 @@ OCR_SAMPLE_FRAMES: int = 6
 OCR_MIN_CONFIDENCE: float = 0.6
 OCR_MIN_TEXT_LENGTH: int = 3
 
-# Translation (LLM gateway role in config/llm.yaml; free providers by default)
+# Translation: local by default (OPUS-MT models on CTranslate2, offline after the first model download).
+# "llm" routes through the LLM gateway (config/llm.yaml) and is opt-in only.
+DEFAULT_TRANSLATION_BACKEND: str = "local"
 TRANSLATOR_ROLE: str = "translator"
+MODELS_DIR = DATA_DIR / "models"
+TRANSLATION_MODELS_DIR = MODELS_DIR / "translate"
+TTS_MODELS_DIR = MODELS_DIR / "tts"
+ARGOS_INDEX_URL: str = "https://raw.githubusercontent.com/argosopentech/argospm-index/main/index.json"
+PIVOT_LANGUAGE: str = "en"
+LOCAL_TRANSLATION_BEAM_SIZE: int = 4
 # Characters per second a viewer can read (subtitles) or a TTS voice can speak (dub) comfortably.
 SUBTITLE_CHARS_PER_SECOND: float = 17.0
 DUB_CHARS_PER_SECOND: float = 14.0
@@ -126,12 +134,24 @@ SUBTITLE_SIDE_MARGIN_RATIO: float = 0.06
 DUB_MAX_SPEEDUP: float = 1.35
 DUB_BACKGROUND_VOLUME: float = 0.12
 DUB_SAMPLE_RATE: int = 44100
+# TTS: local Piper voices by default (offline after the first voice download); "edge" (online edge-tts) is opt-in.
+DEFAULT_TTS_BACKEND: str = "piper"
+PIPER_VOICES_URL: str = "https://huggingface.co/rhasspy/piper-voices/resolve/main"
 DEFAULT_TTS_VOICES: Dict[str, str] = {
+    "pt": "pt_BR-faber-medium",
+    "pt-BR": "pt_BR-faber-medium",
+    "pt-PT": "pt_PT-tugão-medium",
+    "es": "es_MX-ald-medium",
+    "es-ES": "es_ES-davefx-medium",
+    "en": "en_US-lessac-medium",
+    "fr": "fr_FR-siwis-medium",
+    "de": "de_DE-thorsten-medium",
+    "it": "it_IT-riccardo-x_low",
+}
+EDGE_TTS_VOICES: Dict[str, str] = {
     "pt": "pt-BR-AntonioNeural",
     "pt-BR": "pt-BR-AntonioNeural",
-    "pt-PT": "pt-PT-DuarteNeural",
     "es": "es-MX-JorgeNeural",
-    "es-ES": "es-ES-AlvaroNeural",
     "en": "en-US-GuyNeural",
     "fr": "fr-FR-HenriNeural",
     "de": "de-DE-ConradNeural",

@@ -1,7 +1,7 @@
 """
 Live end-to-end check of the localization pipeline against real services.
 
-Runs one real video through download (yt-dlp) -> transcribe (faster-whisper) -> translate (free LLM chain: NVIDIA -> Atria -> OpenRouter)
+Runs one real video through download (yt-dlp) -> transcribe (faster-whisper) -> translate (local OPUS-MT) -> voice (local Piper)
 -> voice (subtitles, plus edge-tts in dub mode) in an isolated temp database and workspace,
 so it never touches data/cache.sqlite3.
 
@@ -9,9 +9,8 @@ Usage:
     python scripts/smoke_live.py --check
     python scripts/smoke_live.py https://www.youtube.com/shorts/<id> --language pt-BR --mode dub
 
-Needs: network access to the video platform, huggingface.co (first Whisper model download),
-at least one LLM provider key (NVIDIA_API_KEY, ATRIA_API_KEY, OPENROUTER_API_KEY) and, for dub mode,
-speech.platform.bing.com.
+Needs network access only to the video platform and, the first time, to download the local models
+(huggingface.co for Whisper and Piper, argos-net.com for translation). No API keys.
 """
 from __future__ import annotations
 
@@ -29,11 +28,9 @@ HOSTS = {
     "YouTube": "www.youtube.com",
     "Instagram": "www.instagram.com",
     "TikTok": "www.tiktok.com",
-    "Whisper models (Hugging Face)": "huggingface.co",
-    "NVIDIA API catalog": "integrate.api.nvidia.com",
-    "Atria": "api.atria-asi.ai",
-    "OpenRouter": "openrouter.ai",
-    "edge-tts": "speech.platform.bing.com",
+    "Whisper models + Piper voices (Hugging Face)": "huggingface.co",
+    "Translation model index": "raw.githubusercontent.com",
+    "Translation models (Argos)": "argos-net.com",
 }
 
 

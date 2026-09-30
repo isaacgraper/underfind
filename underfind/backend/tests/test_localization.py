@@ -188,8 +188,9 @@ def test_ass_renders_with_ffmpeg(tmp_path: Path, clip: Path):
 
 
 def test_default_voice():
-    assert default_voice("pt-BR") == "pt-BR-AntonioNeural"
-    assert default_voice("es-AR") == "es-MX-JorgeNeural"
+    assert default_voice("pt-BR") == "pt_BR-faber-medium"
+    assert default_voice("es-AR") == "es_MX-ald-medium"
+    assert default_voice("pt-BR", {"pt": "pt-BR-AntonioNeural"}) == "pt-BR-AntonioNeural"
 
     with pytest.raises(PermanentStageError):
         default_voice("ja")
@@ -300,7 +301,7 @@ def test_auto_approved_dub_page_runs_to_voiced(repo: PipelineRepository, tmp_pat
     job = runner.run_until_blocked(job_id)
 
     assert job.status == JobStatus.VOICED
-    assert [voice for _, voice in tts.calls] == ["pt-BR-AntonioNeural"] * 3
+    assert [voice for _, voice in tts.calls] == ["pt_BR-faber-medium"] * 3
     assert probe_duration(Path(job.artifacts["dub_audio"])) == pytest.approx(6.0, abs=0.15)
     assert Path(job.artifacts["subtitles_ass"]).exists()
 
