@@ -29,6 +29,37 @@ Plataforma de inteligência de conteúdo para garimpar vídeos e Shorts virais, 
 
 ---
 
+## Pipeline de Localização (v2.2, em construção)
+
+Objetivo: pegar Reels/Shorts/TikToks internacionais (nicho inicial: GTA VI), traduzir para o idioma de cada página e renderizar no formato "foto de perfil + nome no topo, vídeo abaixo", entregando o arquivo final para a ferramenta de publicação em lote.
+
+Cada vídeo de origem vira um **job** com máquina de estados persistida em SQLite:
+
+```
+found -> downloaded -> transcribed -> translated -> voiced -> rendered -> exported
+                    (qualquer etapa ativa) -> failed | discarded
+```
+
+- Avanço só de uma etapa por vez; voltar para qualquer etapa anterior é permitido (re-execução).
+- `failed` guarda a etapa que falhou e só permite retentar a partir dela ou antes; `discarded` só volta para `found`.
+- A partir de `translated` o job precisa de uma **página de destino** (nome, @, avatar, idioma, template).
+- **Registro de uso:** uma origem que já tem job não é reaproveitada (409), inclusive reuploads em outra plataforma detectados por hash perceptual (`force=true` ignora).
+- **Cota do YouTube:** cada chamada reserva unidades antes de executar (`YOUTUBE_DAILY_QUOTA`), com retry exponencial para 429/5xx e bloqueio ao esgotar (HTTP 429 na API).
+
+| Endpoint | Função |
+|---|---|
+| `POST /api/jobs` | Abre job a partir de URL do YouTube, Instagram ou TikTok (links curtos `vm.tiktok.com` são resolvidos) |
+| `POST /api/jobs/from-video` | Abre job a partir de um resultado da busca/trending |
+| `GET /api/jobs`, `GET /api/jobs/{id}`, `GET /api/jobs/{id}/events`, `GET /api/jobs/stats` | Consulta de jobs, histórico e contagem por status |
+| `PATCH /api/jobs/{id}/status`, `PATCH /api/jobs/{id}/page` | Move o job na pipeline / define a página de destino |
+| `GET/POST/PUT/DELETE /api/pages` | Perfis de página (identidade + idioma) |
+| `GET/POST/PUT /api/templates` | Templates de renderização (cabeçalho, fontes, legenda) |
+| `GET /api/quota` | Uso de cota do dia |
+
+Próximas fases: download (yt-dlp) + transcrição (Whisper), renderização do template (ffmpeg), exportação com manifest, tradução/dublagem e busca automatizada multi-plataforma.
+
+---
+
 ## 🚀 Como Rodar
 
 ### Opção 1: Execução Nativa em Python

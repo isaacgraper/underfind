@@ -16,6 +16,7 @@ from underfind.backend.core.constants import (
 from underfind.backend.schemas.video import VideoItem
 from underfind.backend.schemas.blueprint import VideoBlueprint, TranscriptLine
 from underfind.backend.core.logger import logger
+from underfind.backend.db.migrations import apply_migrations
 
 
 class CacheManager:
@@ -37,6 +38,7 @@ class CacheManager:
     def _get_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
     def _init_db(self) -> None:
@@ -109,6 +111,7 @@ class CacheManager:
                     status TEXT DEFAULT 'backlog',
                     hook_text TEXT,
                     script_notes TEXT,
+                    job_id TEXT,
                     created_at TIMESTAMP,
                     updated_at TIMESTAMP
                 )
@@ -118,6 +121,8 @@ class CacheManager:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_videos_ratio ON videos(viral_ratio DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ideas_status ON ideas_board(status)")
             conn.commit()
+
+            apply_migrations(conn)
 
     @staticmethod
     def generate_query_key(
@@ -155,7 +160,12 @@ class CacheManager:
                 return None
 
             cursor.execute(
-                "SELECT * FROM videos WHERE query_key = ? ORDER BY viral_ratio DESC",
+                """
+                SELECT v.* FROM videos v
+                JOIN query_videos qv ON qv.video_id = v.video_id
+                WHERE qv.query_key = ?
+                ORDER BY v.viral_ratio DESC
+                """,
                 (query_key,)
             )
             rows = cursor.fetchall()
@@ -237,6 +247,10 @@ class CacheManager:
                         v.published_at, v.video_url, int(v.is_short), v.viral_ratio, v.description,
                         tags_json, query_key, now
                     )
+                )
+                conn.execute(
+                    "INSERT OR IGNORE INTO query_videos (query_key, video_id) VALUES (?, ?)",
+                    (query_key, v.video_id)
                 )
 
             conn.commit()

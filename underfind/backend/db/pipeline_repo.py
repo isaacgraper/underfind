@@ -1,0 +1,576 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import List, Optional, Dict, Any
+
+from underfind.backend.core.constants import (
+    DATABASE_PATH,
+    DEFAULT_LOCALIZATION_MODE,
+    PHASH_MAX_DISTANCE,
+)
+from underfind.backend.core.errors import InvalidTransitionError, NotFoundError
+from underfind.backend.core.logger import logger
+from underfind.backend.core.utils import hamming_distance_hex
+from underfind.backend.db.migrations import apply_migrations
+from underfind.backend.schemas.pipeline import (
+    Job,
+    JobEvent,
+    JobStatus,
+    PageProfile,
+    Platform,
+    RenderTemplate,
+    SourceVideo,
+    PIPELINE_STAGES,
+    PAGE_REQUIRED_FROM,
+)
+
+_SOURCE_FIELDS = [
+    "platform", "source_id", "url", "title", "caption", "author_handle", "author_name",
+    "thumbnail_url", "views", "likes", "comments_count", "followers", "duration_seconds",
+    "published_at", "language", "phash",
+]
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def check_transition(
+    current: JobStatus,
+    target: JobStatus,
+    failed_from: Optional[JobStatus] = None,
+    has_page: bool = False,
+) -> None:
+    """
+    Validates a job status change:
+    - forward moves advance exactly one stage; backward moves (re-run) may jump to any earlier stage
+    - any active job can fail or be discarded; exported jobs are final except for re-runs
+    - failed jobs retry from the stage that failed or earlier; discarded jobs can only be restored to 'found'
+    - page-specific stages (translated onward) need a target page
+    """
+    if current == target:
+        raise InvalidTransitionError(f"Job is already '{current.value}'.")
+
+    if target == JobStatus.FAILED:
+        if current in (JobStatus.EXPORTED, JobStatus.DISCARDED):
+            raise InvalidTransitionError(f"A '{current.value}' job cannot fail.")
+        return
+
+    if target == JobStatus.DISCARDED:
+        if current == JobStatus.EXPORTED:
+            raise InvalidTransitionError("An exported job cannot be discarded.")
+        return
+
+    if current == JobStatus.DISCARDED:
+        if target != JobStatus.FOUND:
+            raise InvalidTransitionError("A discarded job can only be restored to 'found'.")
+        return
+
+    target_idx = PIPELINE_STAGES.index(target)
+
+    if target_idx >= PIPELINE_STAGES.index(PAGE_REQUIRED_FROM) and not has_page:
+        raise InvalidTransitionError(f"Assign a target page before moving a job to '{target.value}'.")
+
+    if current == JobStatus.FAILED:
+        ceiling = PIPELINE_STAGES.index(failed_from) if failed_from else 0
+
+        if target_idx > ceiling:
+            raise InvalidTransitionError(
+                f"A failed job can only be retried from '{(failed_from or JobStatus.FOUND).value}' or an earlier stage."
+            )
+        return
+
+    current_idx = PIPELINE_STAGES.index(current)
+
+    if target_idx > current_idx + 1:
+        raise InvalidTransitionError(
+            f"Cannot skip stages: '{current.value}' can only advance to '{PIPELINE_STAGES[current_idx + 1].value}'."
+        )
+
+
+class PipelineRepository:
+    """SQLite persistence for source videos, localization jobs, page profiles and render templates."""
+
+    def __init__(
+        self,
+        db_path: Path = DATABASE_PATH,
+    ):
+        self.db_path = db_path
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with self._get_connection() as conn:
+            conn.execute("PRAGMA journal_mode = WAL")
+            apply_migrations(conn)
+
+    def _get_connection(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
+
+    # ------------------------------------------------------------------ sources
+
+    @staticmethod
+    def _row_to_source(row: sqlite3.Row) -> SourceVideo:
+        data = {field: row[field] for field in _SOURCE_FIELDS}
+        data["platform"] = Platform(data["platform"])
+        return SourceVideo(**data)
+
+    def upsert_source(
+        self,
+        source: SourceVideo,
+    ) -> SourceVideo:
+        """Inserts a source video or refreshes its metadata, never overwriting known values with nulls."""
+        now = _now()
+        values = source.model_dump()
+        values["platform"] = source.platform.value
+        update_cols = [f for f in _SOURCE_FIELDS if f not in ("platform", "source_id")]
+
+        with self._get_connection() as conn:
+            conn.execute(
+                f"""
+                INSERT INTO source_videos (source_key, {", ".join(_SOURCE_FIELDS)}, created_at, updated_at)
+                VALUES (?, {", ".join("?" for _ in _SOURCE_FIELDS)}, ?, ?)
+                ON CONFLICT(source_key) DO UPDATE SET
+                    {", ".join(f"{c} = COALESCE(excluded.{c}, {c})" for c in update_cols)},
+                    updated_at = excluded.updated_at
+                """,
+                (source.key, *[values[f] for f in _SOURCE_FIELDS], now, now)
+            )
+            conn.commit()
+
+        logger.trace("Upserted source video %s", source.key)
+        return self.get_source(source.key)
+
+    def get_source(
+        self,
+        source_key: str,
+    ) -> Optional[SourceVideo]:
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT * FROM source_videos WHERE source_key = ?", (source_key,)).fetchone()
+
+        return self._row_to_source(row) if row else None
+
+    def set_source_phash(
+        self,
+        source_key: str,
+        phash: str,
+    ) -> None:
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE source_videos SET phash = ?, updated_at = ? WHERE source_key = ?",
+                (phash, _now(), source_key)
+            )
+            conn.commit()
+
+    def find_similar_source(
+        self,
+        phash: str,
+        max_distance: int = PHASH_MAX_DISTANCE,
+        exclude_key: Optional[str] = None,
+    ) -> Optional[SourceVideo]:
+        """Finds the closest known source whose perceptual hash is within max_distance bits (cross-platform reuploads)."""
+        with self._get_connection() as conn:
+            rows = conn.execute("SELECT * FROM source_videos WHERE phash IS NOT NULL").fetchall()
+
+        best: Optional[sqlite3.Row] = None
+        best_distance = max_distance + 1
+
+        for row in rows:
+            if row["source_key"] == exclude_key or len(row["phash"]) != len(phash):
+                continue
+
+            distance = hamming_distance_hex(phash, row["phash"])
+
+            if distance < best_distance:
+                best, best_distance = row, distance
+
+        return self._row_to_source(best) if best else None
+
+    def get_source_job_id(
+        self,
+        source_key: str,
+    ) -> Optional[str]:
+        """Returns the first job created for a source; any job (including discarded) marks the source as used."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT id FROM jobs WHERE source_key = ? ORDER BY created_at LIMIT 1",
+                (source_key,)
+            ).fetchone()
+
+        return row["id"] if row else None
+
+    def is_source_used(
+        self,
+        platform: str,
+        source_id: str,
+    ) -> bool:
+        return self.get_source_job_id(f"{platform}:{source_id}") is not None
+
+    # --------------------------------------------------------------------- jobs
+
+    def _row_to_job(
+        self,
+        row: sqlite3.Row,
+        source: Optional[SourceVideo] = None,
+    ) -> Job:
+        return Job(
+            id=row["id"],
+            source_key=row["source_key"],
+            page_id=row["page_id"],
+            status=JobStatus(row["status"]),
+            failed_from=JobStatus(row["failed_from"]) if row["failed_from"] else None,
+            error=row["error"],
+            mode=row["mode"],
+            artifacts=json.loads(row["artifacts_json"]) if row["artifacts_json"] else {},
+            notes=row["notes"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            source=source,
+        )
+
+    def create_job(
+        self,
+        source_key: str,
+        page_id: Optional[int] = None,
+        mode: str = DEFAULT_LOCALIZATION_MODE,
+        note: Optional[str] = None,
+    ) -> Job:
+        if not self.get_source(source_key):
+            raise NotFoundError(f"Source video '{source_key}' not found.")
+
+        if page_id is not None and not self.get_page(page_id):
+            raise NotFoundError(f"Page profile {page_id} not found.")
+
+        job_id = uuid.uuid4().hex[:12]
+        now = _now()
+
+        with self._get_connection() as conn:
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO jobs (id, source_key, page_id, status, mode, artifacts_json, notes, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, '{}', ?, ?, ?)
+                    """,
+                    (job_id, source_key, page_id, JobStatus.FOUND.value, mode, note, now, now)
+                )
+            except sqlite3.IntegrityError as err:
+                raise InvalidTransitionError(f"Source '{source_key}' already has a job for page {page_id}.") from err
+
+            conn.execute(
+                "INSERT INTO job_events (job_id, from_status, to_status, note, created_at) VALUES (?, NULL, ?, ?, ?)",
+                (job_id, JobStatus.FOUND.value, note, now)
+            )
+            conn.commit()
+
+        logger.info("Created job %s for source %s (page=%s, mode=%s)", job_id, source_key, page_id, mode)
+        return self.get_job(job_id)
+
+    def get_job(
+        self,
+        job_id: str,
+    ) -> Job:
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+
+        if not row:
+            raise NotFoundError(f"Job '{job_id}' not found.")
+
+        return self._row_to_job(row, self.get_source(row["source_key"]))
+
+    def list_jobs(
+        self,
+        status: Optional[JobStatus] = None,
+        page_id: Optional[int] = None,
+        limit: int = 200,
+    ) -> List[Job]:
+        clauses: List[str] = []
+        params: List[Any] = []
+
+        if status is not None:
+            clauses.append("j.status = ?")
+            params.append(status.value)
+
+        if page_id is not None:
+            clauses.append("j.page_id = ?")
+            params.append(page_id)
+
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT j.*, {", ".join(f"s.{f} AS s_{f}" for f in _SOURCE_FIELDS)}
+                FROM jobs j JOIN source_videos s ON s.source_key = j.source_key
+                {where}
+                ORDER BY j.updated_at DESC
+                LIMIT ?
+                """,
+                (*params, limit)
+            ).fetchall()
+
+        jobs: List[Job] = []
+
+        for row in rows:
+            source_data = {f: row[f"s_{f}"] for f in _SOURCE_FIELDS}
+            source_data["platform"] = Platform(source_data["platform"])
+            jobs.append(self._row_to_job(row, SourceVideo(**source_data)))
+
+        return jobs
+
+    def transition(
+        self,
+        job_id: str,
+        target: JobStatus,
+        note: Optional[str] = None,
+        error: Optional[str] = None,
+    ) -> Job:
+        """Moves a job to a new status after validating the state machine, recording the event."""
+        job = self.get_job(job_id)
+        check_transition(job.status, target, job.failed_from, has_page=job.page_id is not None)
+
+        failed_from = job.status.value if target == JobStatus.FAILED else None
+        stored_error = error if target == JobStatus.FAILED else None
+        now = _now()
+
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE jobs SET status = ?, failed_from = ?, error = ?, updated_at = ? WHERE id = ?",
+                (target.value, failed_from, stored_error, now, job_id)
+            )
+            conn.execute(
+                "INSERT INTO job_events (job_id, from_status, to_status, note, created_at) VALUES (?, ?, ?, ?, ?)",
+                (job_id, job.status.value, target.value, note or error, now)
+            )
+            conn.commit()
+
+        logger.debug("Job %s: %s -> %s", job_id, job.status.value, target.value)
+        return self.get_job(job_id)
+
+    def assign_page(
+        self,
+        job_id: str,
+        page_id: int,
+    ) -> Job:
+        job = self.get_job(job_id)
+
+        if not self.get_page(page_id):
+            raise NotFoundError(f"Page profile {page_id} not found.")
+
+        stage = job.failed_from if job.status == JobStatus.FAILED else job.status
+
+        if stage in PIPELINE_STAGES and PIPELINE_STAGES.index(stage) >= PIPELINE_STAGES.index(PAGE_REQUIRED_FROM):
+            raise InvalidTransitionError("The target page can only change before translation; move the job back first.")
+
+        with self._get_connection() as conn:
+            try:
+                conn.execute(
+                    "UPDATE jobs SET page_id = ?, updated_at = ? WHERE id = ?",
+                    (page_id, _now(), job_id)
+                )
+            except sqlite3.IntegrityError as err:
+                raise InvalidTransitionError(f"Source '{job.source_key}' already has a job for page {page_id}.") from err
+
+            conn.commit()
+
+        return self.get_job(job_id)
+
+    def set_artifact(
+        self,
+        job_id: str,
+        name: str,
+        path: str,
+    ) -> Job:
+        job = self.get_job(job_id)
+        artifacts = {**job.artifacts, name: path}
+
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE jobs SET artifacts_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(artifacts), _now(), job_id)
+            )
+            conn.commit()
+
+        return self.get_job(job_id)
+
+    def get_job_events(
+        self,
+        job_id: str,
+    ) -> List[JobEvent]:
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM job_events WHERE job_id = ? ORDER BY id",
+                (job_id,)
+            ).fetchall()
+
+        return [
+            JobEvent(
+                job_id=r["job_id"],
+                from_status=JobStatus(r["from_status"]) if r["from_status"] else None,
+                to_status=JobStatus(r["to_status"]),
+                note=r["note"],
+                created_at=r["created_at"],
+            )
+            for r in rows
+        ]
+
+    def count_jobs_by_status(self) -> Dict[str, int]:
+        with self._get_connection() as conn:
+            rows = conn.execute("SELECT status, COUNT(*) AS n FROM jobs GROUP BY status").fetchall()
+
+        return {r["status"]: r["n"] for r in rows}
+
+    # ------------------------------------------------------------ page profiles
+
+    @staticmethod
+    def _row_to_page(row: sqlite3.Row) -> PageProfile:
+        return PageProfile(
+            id=row["id"],
+            display_name=row["display_name"],
+            handle=row["handle"],
+            avatar_path=row["avatar_path"],
+            language=row["language"],
+            template_id=row["template_id"],
+            default_hashtags=json.loads(row["default_hashtags_json"]) if row["default_hashtags_json"] else [],
+            caption_footer=row["caption_footer"],
+            active=bool(row["active"]),
+        )
+
+    def save_page(
+        self,
+        page: PageProfile,
+    ) -> PageProfile:
+        """Creates a page profile, or updates it when page.id is set."""
+        if page.template_id is not None and not self.get_template(page.template_id):
+            raise NotFoundError(f"Render template {page.template_id} not found.")
+
+        now = _now()
+        values = (
+            page.display_name, page.handle.lstrip("@"), page.avatar_path, page.language, page.template_id,
+            json.dumps(page.default_hashtags), page.caption_footer, int(page.active),
+        )
+
+        with self._get_connection() as conn:
+            if page.id is None:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO page_profiles (
+                        display_name, handle, avatar_path, language, template_id,
+                        default_hashtags_json, caption_footer, active, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (*values, now, now)
+                )
+                page_id = cursor.lastrowid
+            else:
+                cursor = conn.execute(
+                    """
+                    UPDATE page_profiles SET
+                        display_name = ?, handle = ?, avatar_path = ?, language = ?, template_id = ?,
+                        default_hashtags_json = ?, caption_footer = ?, active = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (*values, now, page.id)
+                )
+
+                if cursor.rowcount == 0:
+                    raise NotFoundError(f"Page profile {page.id} not found.")
+
+                page_id = page.id
+
+            conn.commit()
+
+        return self.get_page(page_id)
+
+    def get_page(
+        self,
+        page_id: int,
+    ) -> Optional[PageProfile]:
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT * FROM page_profiles WHERE id = ?", (page_id,)).fetchone()
+
+        return self._row_to_page(row) if row else None
+
+    def list_pages(
+        self,
+        active_only: bool = False,
+    ) -> List[PageProfile]:
+        query = "SELECT * FROM page_profiles"
+
+        if active_only:
+            query += " WHERE active = 1"
+
+        with self._get_connection() as conn:
+            rows = conn.execute(query + " ORDER BY display_name").fetchall()
+
+        return [self._row_to_page(r) for r in rows]
+
+    def delete_page(
+        self,
+        page_id: int,
+    ) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.execute("DELETE FROM page_profiles WHERE id = ?", (page_id,))
+            conn.commit()
+
+        return cursor.rowcount > 0
+
+    # ---------------------------------------------------------- render templates
+
+    @staticmethod
+    def _row_to_template(row: sqlite3.Row) -> RenderTemplate:
+        config = json.loads(row["config_json"])
+        return RenderTemplate(**{**config, "id": row["id"], "name": row["name"]})
+
+    def save_template(
+        self,
+        template: RenderTemplate,
+    ) -> RenderTemplate:
+        """Creates a render template, or updates it when template.id is set."""
+        now = _now()
+        config_json = json.dumps(template.model_dump(exclude={"id", "name"}))
+
+        with self._get_connection() as conn:
+            if template.id is None:
+                cursor = conn.execute(
+                    "INSERT INTO render_templates (name, config_json, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                    (template.name, config_json, now, now)
+                )
+                template_id = cursor.lastrowid
+            else:
+                cursor = conn.execute(
+                    "UPDATE render_templates SET name = ?, config_json = ?, updated_at = ? WHERE id = ?",
+                    (template.name, config_json, now, template.id)
+                )
+
+                if cursor.rowcount == 0:
+                    raise NotFoundError(f"Render template {template.id} not found.")
+
+                template_id = template.id
+
+            conn.commit()
+
+        return self.get_template(template_id)
+
+    def get_template(
+        self,
+        template_id: int,
+    ) -> Optional[RenderTemplate]:
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT * FROM render_templates WHERE id = ?", (template_id,)).fetchone()
+
+        return self._row_to_template(row) if row else None
+
+    def list_templates(self) -> List[RenderTemplate]:
+        with self._get_connection() as conn:
+            rows = conn.execute("SELECT * FROM render_templates ORDER BY name").fetchall()
+
+        return [self._row_to_template(r) for r in rows]
+
+
+pipeline_repo = PipelineRepository()

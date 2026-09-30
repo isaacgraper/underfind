@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 import uvicorn
 
 load_dotenv()
@@ -16,6 +17,12 @@ from underfind.backend.core.constants import (
     DEFAULT_HOST,
     DEFAULT_PORT,
     FRONTEND_DIST_DIR,
+)
+from underfind.backend.core.errors import (
+    InvalidTransitionError,
+    NotFoundError,
+    QuotaExceededError,
+    SourceAlreadyUsedError,
 )
 from underfind.backend.core.logger import logger
 from underfind.backend.routers import api_router
@@ -37,6 +44,47 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
+
+
+@app.exception_handler(QuotaExceededError)
+def handle_quota_exceeded(request: Request, exc: QuotaExceededError) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content={"detail": str(exc), "provider": exc.provider, "used": exc.used, "limit": exc.limit},
+    )
+
+
+@app.exception_handler(SourceAlreadyUsedError)
+def handle_source_used(request: Request, exc: SourceAlreadyUsedError) -> JSONResponse:
+    return JSONResponse(
+        status_code=409,
+        content={
+            "detail": str(exc),
+            "source_key": exc.source_key,
+            "existing_job_id": exc.existing_job_id,
+            "duplicate_of": exc.duplicate_of,
+        },
+    )
+
+
+@app.exception_handler(InvalidTransitionError)
+def handle_invalid_transition(request: Request, exc: InvalidTransitionError) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(sqlite3.IntegrityError)
+def handle_integrity_error(request: Request, exc: sqlite3.IntegrityError) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": f"Conflicts with an existing record: {exc}"})
+
+
+@app.exception_handler(NotFoundError)
+def handle_not_found(request: Request, exc: NotFoundError) -> JSONResponse:
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
+@app.exception_handler(ValueError)
+def handle_value_error(request: Request, exc: ValueError) -> JSONResponse:
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 if FRONTEND_DIST_DIR.exists():
     assets_dir = FRONTEND_DIST_DIR / "assets"

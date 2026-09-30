@@ -180,6 +180,10 @@ node_modules/
 underfind/frontend/dist/
 dist/
 data/*.sqlite3
+data/*.sqlite3-*
+data/sources/
+data/jobs/
+data/pages/
 data/*.db
 .env
 .env.local

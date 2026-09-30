@@ -65,3 +65,25 @@ DEFAULT_MEDPY_CUT_MARKERS: List[Dict[str, str]] = [
 # Service Metadata
 SERVICE_NAME: str = "underfind-api"
 SERVICE_VERSION: str = "2.1.0"
+
+# Pipeline Storage
+SOURCES_DIR = DATA_DIR / "sources"
+JOBS_DIR = DATA_DIR / "jobs"
+PAGE_ASSETS_DIR = DATA_DIR / "pages"
+
+# Pipeline Defaults
+DEFAULT_TARGET_LANGUAGE: str = "pt-BR"
+DEFAULT_LOCALIZATION_MODE: str = "subtitles"
+LOCALIZATION_MODES: List[str] = ["subtitles", "dub"]
+PHASH_MAX_DISTANCE: int = 6
+
+# YouTube Data API Quota (units reset daily at midnight Pacific Time)
+YOUTUBE_DAILY_QUOTA: int = 10000
+YOUTUBE_QUOTA_TIMEZONE: str = "America/Los_Angeles"
+YOUTUBE_QUOTA_COSTS: Dict[str, int] = {
+    "search.list": 100,
+    "videos.list": 1,
+    "channels.list": 1,
+}
+API_MAX_RETRIES: int = 3
+API_BACKOFF_BASE_SECONDS: float = 1.0

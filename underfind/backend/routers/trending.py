@@ -7,6 +7,7 @@ from underfind.backend.core.constants import DEFAULT_REGION, DEFAULT_MAX_RESULTS
 from underfind.backend.schemas.video import VideoItem, TrendingRequest
 from underfind.backend.services.youtube_service import YouTubeService
 from underfind.backend.dependencies import get_youtube_service
+from underfind.backend.core.errors import QuotaExceededError
 from underfind.backend.core.logger import logger
 
 router = APIRouter(tags=["Trending"])
@@ -34,6 +35,8 @@ def get_trending_videos(
         results = svc.get_trending(req)
         logger.trace("API /api/trending returning %d items", len(results))
         return results
+    except QuotaExceededError:
+        raise
     except Exception as e:
         logger.error("Error in API /api/trending: %s", e)
         raise HTTPException(status_code=500, detail=f"Failed to fetch trending videos: {str(e)}")

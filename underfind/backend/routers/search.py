@@ -14,6 +14,7 @@ from underfind.backend.core.constants import (
 from underfind.backend.schemas.video import VideoItem, SearchRequest
 from underfind.backend.services.youtube_service import YouTubeService
 from underfind.backend.dependencies import get_youtube_service
+from underfind.backend.core.errors import QuotaExceededError
 from underfind.backend.core.logger import logger
 
 router = APIRouter(tags=["Search & Outliers"])
@@ -35,6 +36,8 @@ def search_videos(
         raise HTTPException(status_code=400, detail=str(ve))
     except TimeoutError as te:
         raise HTTPException(status_code=504, detail=str(te))
+    except QuotaExceededError:
+        raise
     except Exception as e:
         logger.error("Error in API /api/search: %s", e)
         raise HTTPException(status_code=500, detail=f"Search error: {str(e)}")
@@ -70,6 +73,8 @@ def get_shorts_outliers(
         results = svc.search(req)
         logger.trace("API /api/shorts/outliers returning %d outlier videos", len(results))
         return results
+    except QuotaExceededError:
+        raise
     except Exception as e:
         logger.error("Error in API /api/shorts/outliers: %s", e)
         raise HTTPException(status_code=500, detail=f"Outliers query failed: {str(e)}")

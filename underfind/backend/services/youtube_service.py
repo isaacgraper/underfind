@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import time
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from dotenv import load_dotenv
@@ -19,11 +20,27 @@ from underfind.backend.core.constants import (
     MAX_STANDARD_SHORT_DURATION,
     MAX_EXTENDED_SHORT_DURATION,
     MIN_SUBSCRIBER_BASE,
+    YOUTUBE_QUOTA_COSTS,
+    API_MAX_RETRIES,
+    API_BACKOFF_BASE_SECONDS,
 )
+from underfind.backend.core.errors import QuotaExceededError
+from underfind.backend.core.quota import QuotaTracker, youtube_quota
 from underfind.backend.core.utils import parse_iso8601_duration, calculate_viral_ratio
 from underfind.backend.db.database import cache_manager
 from underfind.backend.schemas.video import VideoItem, SearchRequest, TrendingRequest
 from underfind.backend.core.logger import logger
+
+_RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+_QUOTA_REASONS = {"quotaExceeded", "dailyLimitExceeded", "rateLimitExceeded"}
+
+
+def _http_error_reason(err: HttpError) -> str:
+    try:
+        payload = json.loads(err.content.decode("utf-8") if isinstance(err.content, bytes) else err.content)
+        return payload["error"]["errors"][0].get("reason", "")
+    except Exception:
+        return ""
 
 
 class YouTubeService:
@@ -32,8 +49,12 @@ class YouTubeService:
     def __init__(
         self,
         api_key: Optional[str] = None,
+        quota: Optional[QuotaTracker] = None,
+        sleep=time.sleep,
     ):
         load_dotenv()
+        self.quota = quota or youtube_quota
+        self._sleep = sleep
         self.api_key = (
             api_key
             or os.environ.get("YOUTUBE_API_KEY", "")
@@ -53,38 +74,79 @@ class YouTubeService:
         self._service = build("youtube", "v3", developerKey=self.api_key)
         return self._service
 
+    def _execute(
+        self,
+        request: Any,
+        method: str,
+    ) -> Dict[str, Any]:
+        """
+        Executes a YouTube API request under the daily quota budget.
+        Retries transient failures (429/5xx, timeouts) with exponential backoff; stops for good on quota exhaustion.
+        """
+        cost = YOUTUBE_QUOTA_COSTS.get(method, 1)
+
+        for attempt in range(API_MAX_RETRIES):
+            self.quota.consume(cost)
+
+            try:
+                return request.execute()
+
+            except HttpError as err:
+                status = err.resp.status if err.resp is not None else 0
+                reason = _http_error_reason(err)
+
+                if status == 403 and reason in _QUOTA_REASONS:
+                    self.quota.mark_exhausted()
+                    status_info = self.quota.status()
+                    raise QuotaExceededError("youtube", status_info.used, status_info.limit, cost) from err
+
+                if status not in _RETRYABLE_STATUSES or attempt == API_MAX_RETRIES - 1:
+                    raise
+
+                logger.warning("YouTube %s failed with HTTP %s (%s); retry %d/%d", method, status, reason, attempt + 1, API_MAX_RETRIES - 1)
+
+            except (TimeoutError, socket.timeout):
+                if attempt == API_MAX_RETRIES - 1:
+                    raise
+
+                logger.warning("YouTube %s timed out; retry %d/%d", method, attempt + 1, API_MAX_RETRIES - 1)
+
+            self._sleep(API_BACKOFF_BASE_SECONDS * (2 ** attempt))
+
+        raise RuntimeError("unreachable")
+
     def _fetch_channels_subscribers(
         self,
         channel_ids: List[str],
-    ) -> Dict[str, int]:
-        """Fetches subscriber counts for a batch of channels."""
+    ) -> Dict[str, Optional[int]]:
+        """Fetches subscriber counts for a batch of channels. Hidden counts map to None."""
         if not channel_ids:
             return {}
 
         svc = self._get_service()
-        subs_map: Dict[str, int] = {}
+        subs_map: Dict[str, Optional[int]] = {}
 
         for i in range(0, len(channel_ids), 50):
             chunk = channel_ids[i:i + 50]
             logger.debug("Requesting YouTube channel statistics for %d channels: %s", len(chunk), chunk[:5])
 
-            try:
-                res = svc.channels().list(
+            res = self._execute(
+                svc.channels().list(
                     part="statistics",
                     id=",".join(chunk),
                     maxResults=len(chunk),
-                ).execute()
+                ),
+                "channels.list",
+            )
 
-                items = res.get("items", [])
-                logger.trace("Received statistics for %d channels", len(items))
+            items = res.get("items", [])
+            logger.trace("Received statistics for %d channels", len(items))
 
-                for ch in items:
-                    cid = ch.get("id")
-                    count = ch.get("statistics", {}).get("subscriberCount")
-                    subs_map[cid] = int(count) if count is not None else 0
-
-            except (HttpError, TimeoutError, socket.timeout) as e:
-                logger.debug("Error retrieving channel subscriber data: %s", e)
+            for ch in items:
+                stats = ch.get("statistics", {})
+                count = stats.get("subscriberCount")
+                hidden = stats.get("hiddenSubscriberCount", False)
+                subs_map[ch.get("id")] = int(count) if count is not None and not hidden else None
 
         return subs_map
 
@@ -133,12 +195,13 @@ class YouTubeService:
                     break
 
             channel_id = snippet.get("channelId")
-            subs = channel_subs.get(channel_id, 0)
+            subs = channel_subs.get(channel_id)
             views = int(statistics.get("viewCount", 0) or 0)
             likes = int(statistics.get("likeCount", 0) or 0)
             comments = int(statistics.get("commentCount", 0) or 0)
 
-            viral_ratio = calculate_viral_ratio(views, subs, min_base=MIN_SUBSCRIBER_BASE)
+            # Unknown or hidden subscriber counts would divide by the 100 floor and fake a huge ratio.
+            viral_ratio = calculate_viral_ratio(views, subs, min_base=MIN_SUBSCRIBER_BASE) if subs is not None else 0.0
 
             video = VideoItem(
                 video_id=vid,
@@ -175,45 +238,48 @@ class YouTubeService:
             chunk = video_ids[i:i + 50]
             logger.debug("Requesting YouTube video details chunk of %d videos: %s", len(chunk), chunk[:5])
 
-            try:
-                res = svc.videos().list(
+            res = self._execute(
+                svc.videos().list(
                     part="snippet,statistics,contentDetails",
                     id=",".join(chunk),
                     maxResults=len(chunk),
-                ).execute()
-                items = res.get("items", [])
-                logger.trace("Received %d video detail items from YouTube API", len(items))
+                ),
+                "videos.list",
+            )
+            items = res.get("items", [])
+            logger.trace("Received %d video detail items from YouTube API", len(items))
 
-                videos = self._process_video_items(items)
-                all_videos.extend(videos)
+            all_videos.extend(self._process_video_items(items))
 
-            except HttpError as e:
-                logger.error("Error loading video batch details: %s", e)
-
-        filtered: List[VideoItem] = []
-
-        for v in all_videos:
-            if req.is_shorts_only and not v.is_short:
-                continue
-
-            if req.min_views is not None and (v.views or 0) < req.min_views:
-                continue
-
-            if req.max_views is not None and (v.views or 0) > req.max_views:
-                continue
-
-            if req.max_subscribers is not None and (v.subscribers or 0) > req.max_subscribers:
-                continue
-
-            if req.min_viral_ratio is not None and v.viral_ratio < req.min_viral_ratio:
-                continue
-
-            filtered.append(v)
+        filtered = [v for v in all_videos if self._passes_filters(v, req)]
 
         filtered.sort(key=lambda x: x.viral_ratio, reverse=True)
 
         logger.debug("Filtered %d videos from %d raw candidates.", len(filtered), len(all_videos))
         return filtered
+
+    @staticmethod
+    def _passes_filters(
+        v: VideoItem,
+        req: SearchRequest,
+    ) -> bool:
+        if req.is_shorts_only and not v.is_short:
+            return False
+
+        if req.min_views is not None and (v.views or 0) < req.min_views:
+            return False
+
+        if req.max_views is not None and (v.views or 0) > req.max_views:
+            return False
+
+        # An unknown subscriber count cannot prove the channel is under the cap.
+        if req.max_subscribers is not None and (v.subscribers is None or v.subscribers > req.max_subscribers):
+            return False
+
+        if req.min_viral_ratio is not None and v.viral_ratio < req.min_viral_ratio:
+            return False
+
+        return True
 
     def search(
         self,
@@ -230,13 +296,7 @@ class YouTubeService:
             cached = cache_manager.get_cached_videos(query_key)
 
             if cached:
-                filtered = [
-                    v for v in cached
-                    if (req.min_views is None or (v.views or 0) >= req.min_views)
-                    and (req.max_views is None or (v.views or 0) <= req.max_views)
-                    and (req.max_subscribers is None or (v.subscribers or 0) <= req.max_subscribers)
-                    and (req.min_viral_ratio is None or v.viral_ratio >= req.min_viral_ratio)
-                ]
+                filtered = [v for v in cached if self._passes_filters(v, req)]
 
                 logger.info("Cache HIT for '%s': %d videos loaded from SQLite without quota usage.", req.query, len(filtered))
                 return filtered
@@ -260,7 +320,7 @@ class YouTubeService:
 
         try:
             logger.debug("Calling YouTube search API with parameters: %s", search_params)
-            res = svc.search().list(**search_params).execute()
+            res = self._execute(svc.search().list(**search_params), "search.list")
             items = res.get("items", [])
 
             video_ids = [
@@ -283,12 +343,7 @@ class YouTubeService:
             return enriched
 
         except (TimeoutError, socket.timeout) as err:
-            logger.warning("Network timeout connecting to YouTube API: %s. Falling back to cached top outliers.", err)
-            fallback = cache_manager.get_top_performing_videos(limit=req.max_results)
-
-            if fallback:
-                return fallback
-
+            # Returning unrelated cached outliers here would pass them off as results for this query.
             raise TimeoutError("YouTube API connection timed out. Check internet connectivity.") from err
 
         except HttpError as e:
@@ -313,7 +368,7 @@ class YouTubeService:
 
         try:
             logger.debug("Calling YouTube trending API with parameters: %s", params)
-            res = svc.videos().list(**params).execute()
+            res = self._execute(svc.videos().list(**params), "videos.list")
             items = res.get("items", [])
 
             logger.trace("YouTube trending API response received: %d raw items", len(items))
@@ -334,8 +389,7 @@ class YouTubeService:
             return raw_videos
 
         except (TimeoutError, socket.timeout) as err:
-            logger.warning("Network timeout fetching trending: %s. Returning cached items.", err)
-            return cache_manager.get_top_performing_videos(limit=req.max_results)
+            raise TimeoutError("YouTube API connection timed out while fetching trending videos.") from err
 
         except HttpError as e:
             logger.error("Error fetching trending videos: %s", e)
@@ -377,22 +431,20 @@ class YouTubeService:
 
         svc = self._get_service()
 
-        try:
-            logger.debug("Querying YouTube API for single video ID: %s", video_id)
-            res = svc.videos().list(
+        logger.debug("Querying YouTube API for single video ID: %s", video_id)
+        res = self._execute(
+            svc.videos().list(
                 part="snippet,statistics,contentDetails",
                 id=video_id,
-            ).execute()
-            items = res.get("items", [])
+            ),
+            "videos.list",
+        )
+        items = res.get("items", [])
 
-            logger.trace("YouTube API video detail response for %s: %d items", video_id, len(items))
+        logger.trace("YouTube API video detail response for %s: %d items", video_id, len(items))
 
-            if not items:
-                return None
-
-            videos = self._process_video_items(items)
-            return videos[0] if videos else None
-
-        except (TimeoutError, socket.timeout, HttpError) as e:
-            logger.error("Error fetching video details for %s: %s", video_id, e)
+        if not items:
             return None
+
+        videos = self._process_video_items(items)
+        return videos[0] if videos else None

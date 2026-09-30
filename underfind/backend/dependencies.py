@@ -7,6 +7,8 @@ load_dotenv()
 
 from underfind.backend.services.youtube_service import YouTubeService
 from underfind.backend.db.database import CacheManager, cache_manager
+from underfind.backend.db.pipeline_repo import PipelineRepository, pipeline_repo
+from underfind.backend.core.quota import QuotaTracker, youtube_quota
 
 
 def get_youtube_service() -> YouTubeService:
@@ -16,3 +18,11 @@ def get_youtube_service() -> YouTubeService:
 
 def get_cache_manager() -> CacheManager:
     return cache_manager
+
+
+def get_pipeline_repo() -> PipelineRepository:
+    return pipeline_repo
+
+
+def get_youtube_quota() -> QuotaTracker:
+    return youtube_quota

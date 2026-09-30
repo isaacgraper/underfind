@@ -63,3 +63,46 @@ def clean_transcript_text(text: str) -> str:
         return ""
 
     return " ".join(text.replace("\n", " ").split()).strip()
+
+
+_YOUTUBE_ID = r"(?P<id>[A-Za-z0-9_-]{11})"
+_SOURCE_URL_PATTERNS = [
+    ("youtube", re.compile(r"^https?://(?:www\.|m\.)?youtube\.com/(?:shorts|embed|live)/" + _YOUTUBE_ID)),
+    ("youtube", re.compile(r"^https?://(?:www\.|m\.)?youtube\.com/watch\?(?:.*&)?v=" + _YOUTUBE_ID)),
+    ("youtube", re.compile(r"^https?://youtu\.be/" + _YOUTUBE_ID)),
+    ("instagram", re.compile(r"^https?://(?:www\.)?instagram\.com/(?:[A-Za-z0-9_.]+/)?(?:reels?|p|tv)/(?P<id>[A-Za-z0-9_-]+)")),
+    ("tiktok", re.compile(r"^https?://(?:www\.|m\.)?tiktok\.com/@[^/]+/(?:video|photo)/(?P<id>\d+)")),
+]
+_TIKTOK_SHORT_LINK = re.compile(r"^https?://(?:vm\.tiktok\.com|vt\.tiktok\.com|(?:www\.)?tiktok\.com/t)/[A-Za-z0-9]+")
+
+
+def is_tiktok_short_link(url: str) -> bool:
+    """True for vm.tiktok.com / tiktok.com/t/ links that must be resolved via redirect first."""
+    return bool(_TIKTOK_SHORT_LINK.match((url or "").strip()))
+
+
+def parse_source_url(url: str) -> tuple[str, str]:
+    """Extracts (platform, source_id) from a YouTube, Instagram or TikTok video URL."""
+    clean = (url or "").strip()
+
+    for platform, pattern in _SOURCE_URL_PATTERNS:
+        match = pattern.match(clean)
+
+        if match:
+            return platform, match.group("id")
+
+    if is_tiktok_short_link(clean):
+        raise ValueError(f"TikTok short link must be resolved before parsing: {clean}")
+
+    raise ValueError(f"Unsupported or unrecognized video URL: {clean}")
+
+
+def hamming_distance_hex(
+    hash_a: str,
+    hash_b: str,
+) -> int:
+    """Bit distance between two equal-length hex perceptual hashes."""
+    if len(hash_a) != len(hash_b):
+        raise ValueError("Perceptual hashes must have the same length")
+
+    return bin(int(hash_a, 16) ^ int(hash_b, 16)).count("1")
