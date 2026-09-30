@@ -130,7 +130,10 @@ class PageProfile(BaseModel):
     language: str = DEFAULT_TARGET_LANGUAGE
     template_id: Optional[int] = None
     default_hashtags: List[str] = Field(default_factory=list)
-    caption_footer: Optional[str] = None
+    caption_footer: Optional[str] = Field(
+        default=None,
+        description="Appended to every caption; placeholders {source_author}, {source_url}, {platform} for credit lines",
+    )
     tts_voice: Optional[str] = Field(default=None, description="TTS voice for dub mode; defaults by language")
     niche: Optional[str] = Field(default=None, description="Niche preset in config/niches/<name>.yaml (glossary, keywords, hashtags)")
     brand_tag: Optional[str] = Field(default=None, description="Text in the headline card's brand line; defaults to the handle in capitals")
@@ -148,6 +151,7 @@ class PageProfile(BaseModel):
         return list(dict.fromkeys(value))
     audio_bed_path: Optional[str] = Field(default=None, description="Audio for image reels; silent when empty (add trending audio when publishing)")
     auto_approve_translation: bool = Field(default=False, description="Skip the translation review gate for this page")
+    auto_approve_render: bool = Field(default=False, description="Export rendered posts without the render review gate")
     local_only: bool = Field(default=True, description="Only local AI models for this page's jobs (checked by default)")
     active: bool = True
 
@@ -165,6 +169,7 @@ class Job(BaseModel):
     attempts: int = 0
     locked_by: Optional[str] = None
     translation_approved: bool = False
+    render_approved: bool = False
     local_only: Optional[bool] = Field(default=None, description="Per-job override of the page's local-only setting; None inherits")
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -328,3 +333,28 @@ class CreateJobFromFilesRequest(BaseModel):
     mode: str = Field(default=DEFAULT_LOCALIZATION_MODE, pattern="^(subtitles|dub)$")
     force: bool = False
     local_only: Optional[bool] = None
+
+
+class ExportDeliverable(BaseModel):
+    kind: str = Field(description="reel | post | carousel")
+    files: List[str] = Field(description="File names inside the export folder, in posting order")
+
+
+class ExportManifest(BaseModel):
+    """What the batch publisher reads: one folder per job with the files, caption.txt and this manifest.json."""
+
+    schema_version: int
+    job_id: str
+    exported_at: str
+    folder: str
+    page: Dict[str, str]
+    language: str
+    deliverables: List[ExportDeliverable]
+    caption: str = Field(description="Full post text: localized caption, page footer/credit line, hashtags")
+    caption_body: str
+    hashtags: List[str]
+    headline: str = ""
+    duration_seconds: Optional[float] = None
+    local_ai: bool = True
+    source: Dict[str, Optional[str]]
+    source_metrics: Dict[str, Optional[int]] = Field(default_factory=dict)

@@ -274,6 +274,7 @@ class PipelineRepository:
             attempts=row["attempts"] or 0,
             locked_by=row["locked_by"],
             translation_approved=bool(row["translation_approved"]),
+            render_approved=bool(row["render_approved"]),
             local_only=None if row["local_only"] is None else bool(row["local_only"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
@@ -385,16 +386,19 @@ class PipelineRepository:
 
         with self._get_connection() as conn:
             # Attempts are kept on failure (how hard the worker tried) and reset when the job moves on or is retried.
-            # Moving back before translation invalidates the approved translation.
-            before_translation = target in PIPELINE_STAGES and PIPELINE_STAGES.index(target) < PIPELINE_STAGES.index(JobStatus.TRANSLATED)
+            # Moving back before translation (or before rendering) invalidates that approval.
+            stage = PIPELINE_STAGES.index(target) if target in PIPELINE_STAGES else None
+            before_translation = stage is not None and stage < PIPELINE_STAGES.index(JobStatus.TRANSLATED)
+            before_render = stage is not None and stage < PIPELINE_STAGES.index(JobStatus.RENDERED)
             conn.execute(
                 """
                 UPDATE jobs SET status = ?, failed_from = ?, error = ?, updated_at = ?,
                     attempts = CASE WHEN ? = 'failed' THEN attempts ELSE 0 END,
-                    translation_approved = CASE WHEN ? THEN 0 ELSE translation_approved END
+                    translation_approved = CASE WHEN ? THEN 0 ELSE translation_approved END,
+                    render_approved = CASE WHEN ? THEN 0 ELSE render_approved END
                 WHERE id = ?
                 """,
-                (target.value, failed_from, stored_error, now, target.value, int(before_translation), job_id)
+                (target.value, failed_from, stored_error, now, target.value, int(before_translation), int(before_render), job_id)
             )
             conn.execute(
                 "INSERT INTO job_events (job_id, from_status, to_status, note, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -471,6 +475,7 @@ class PipelineRepository:
                   -- review gates: translation needs a target page, voicing needs an approved translation
                   AND (status != 'transcribed' OR page_id IS NOT NULL)
                   AND (status != 'translated' OR translation_approved = 1)
+                  AND (status != 'rendered' OR render_approved = 1)
                 ORDER BY updated_at
                 LIMIT ?
                 """,
@@ -490,6 +495,20 @@ class PipelineRepository:
             conn.execute(
                 "UPDATE jobs SET local_only = ?, updated_at = ? WHERE id = ?",
                 (None if local_only is None else int(local_only), _now(), job_id)
+            )
+            conn.commit()
+
+        return self.get_job(job_id)
+
+    def set_render_approved(
+        self,
+        job_id: str,
+        approved: bool,
+    ) -> Job:
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE jobs SET render_approved = ?, updated_at = ? WHERE id = ?",
+                (int(approved), _now(), job_id)
             )
             conn.commit()
 
@@ -597,6 +616,7 @@ class PipelineRepository:
             caption_footer=row["caption_footer"],
             tts_voice=row["tts_voice"],
             auto_approve_translation=bool(row["auto_approve_translation"]),
+            auto_approve_render=bool(row["auto_approve_render"]),
             local_only=bool(row["local_only"]),
             niche=row["niche"],
             brand_tag=row["brand_tag"],
@@ -619,7 +639,8 @@ class PipelineRepository:
             page.display_name, page.handle.lstrip("@"), page.avatar_path, page.language, page.template_id,
             json.dumps(page.default_hashtags), page.caption_footer, page.tts_voice,
             int(page.auto_approve_translation), int(page.local_only), page.niche, page.brand_tag,
-            json.dumps(page.glossary), json.dumps(page.outputs), page.audio_bed_path, int(page.active),
+            json.dumps(page.glossary), json.dumps(page.outputs), page.audio_bed_path, int(page.auto_approve_render),
+            int(page.active),
         )
 
         with self._get_connection() as conn:
@@ -630,9 +651,9 @@ class PipelineRepository:
                         display_name, handle, avatar_path, language, template_id,
                         default_hashtags_json, caption_footer, tts_voice, auto_approve_translation,
                         local_only, niche, brand_tag, glossary_json, outputs_json, audio_bed_path,
-                        active, created_at, updated_at
+                        auto_approve_render, active, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (*values, now, now)
                 )
@@ -644,7 +665,8 @@ class PipelineRepository:
                         display_name = ?, handle = ?, avatar_path = ?, language = ?, template_id = ?,
                         default_hashtags_json = ?, caption_footer = ?, tts_voice = ?,
                         auto_approve_translation = ?, local_only = ?, niche = ?, brand_tag = ?,
-                        glossary_json = ?, outputs_json = ?, audio_bed_path = ?, active = ?, updated_at = ?
+                        glossary_json = ?, outputs_json = ?, audio_bed_path = ?, auto_approve_render = ?,
+                        active = ?, updated_at = ?
                     WHERE id = ?
                     """,
                     (*values, now, page.id)

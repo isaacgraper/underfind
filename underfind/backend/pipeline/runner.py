@@ -24,6 +24,7 @@ from underfind.backend.pipeline.stages import (
     translate_stage,
     voice_stage,
     render_stage,
+    export_stage,
 )
 from underfind.backend.schemas.pipeline import Job, JobStatus
 
@@ -43,6 +44,10 @@ def _translation_approved(job: Job) -> bool:
     return job.translation_approved
 
 
+def _render_approved(job: Job) -> bool:
+    return job.render_approved
+
+
 # current status -> (status after success, handler, gate). A job whose gate is closed waits (review, page assignment);
 # statuses without a handler (later phases) stop the run. Keep gates in sync with PipelineRepository.list_runnable_job_ids.
 STAGE_HANDLERS: Dict[JobStatus, Tuple[JobStatus, StageHandler, ReadyCheck]] = {
@@ -51,6 +56,7 @@ STAGE_HANDLERS: Dict[JobStatus, Tuple[JobStatus, StageHandler, ReadyCheck]] = {
     JobStatus.TRANSCRIBED: (JobStatus.TRANSLATED, translate_stage, _has_page),
     JobStatus.TRANSLATED: (JobStatus.VOICED, voice_stage, _translation_approved),
     JobStatus.VOICED: (JobStatus.RENDERED, render_stage, _always_ready),
+    JobStatus.RENDERED: (JobStatus.EXPORTED, export_stage, _render_approved),
 }
 
 

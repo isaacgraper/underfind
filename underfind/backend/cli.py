@@ -268,6 +268,38 @@ def cmd_add(args: argparse.Namespace) -> None:
         cmd_run(argparse.Namespace(job_id=job.id, once=False))
 
 
+def cmd_approve(args: argparse.Namespace) -> None:
+    """Opens whichever review gate the job waits at (translation or render), optionally running it on."""
+    from underfind.backend.core.errors import NotFoundError
+    from underfind.backend.db.pipeline_repo import pipeline_repo
+    from underfind.backend.pipeline.stages import load_translation, save_translation, StageContext
+    from underfind.backend.schemas.pipeline import JobStatus
+    from datetime import datetime, timezone
+
+    try:
+        job = pipeline_repo.get_job(args.job_id)
+    except NotFoundError as err:
+        console.print(f"[bold #ef4444]{err}[/]")
+        sys.exit(1)
+
+    if job.status == JobStatus.TRANSLATED:
+        ctx = StageContext(repo=pipeline_repo)
+        translation = load_translation(ctx, job.id)
+        translation.approved, translation.approved_at = True, datetime.now(timezone.utc).isoformat()
+        save_translation(ctx, job.id, translation)
+        pipeline_repo.set_translation_approved(job.id, True)
+        console.print(f"Translation of job [bold]{job.id}[/] approved")
+    elif job.status == JobStatus.RENDERED:
+        pipeline_repo.set_render_approved(job.id, True)
+        console.print(f"Render of job [bold]{job.id}[/] approved for export")
+    else:
+        console.print(f"[bold #ef4444]Job {job.id} is '{job.status.value}': nothing to approve[/]")
+        sys.exit(1)
+
+    if args.run:
+        cmd_run(argparse.Namespace(job_id=job.id, once=False))
+
+
 def cmd_models(args: argparse.Namespace) -> None:
     """Pre-downloads local translation models and Piper voices so the pipeline runs fully offline afterwards."""
     from underfind.backend.pipeline.dub import PiperTtsProvider
@@ -295,6 +327,7 @@ DISPATCH: Dict[str, Callable[[argparse.Namespace], None]] = {
     "run": cmd_run,
     "models": cmd_models,
     "add": cmd_add,
+    "approve": cmd_approve,
 }
 
 
@@ -350,6 +383,11 @@ def main():
     p_add.add_argument("--run", action="store_true", help="Run the job right after creating it")
     _add_ai_mode_flags(p_add)
 
+    p_approve = subparsers.add_parser("approve", help="Approve the review gate a job waits at (translation or render)")
+    p_approve.add_argument("job_id", help="Job ID")
+    p_approve.add_argument("--run", action="store_true", help="Continue the job right after approving")
+    _add_ai_mode_flags(p_approve)
+
     p_models = subparsers.add_parser("models", help="Download local translation models and Piper voices for offline use")
     p_models.add_argument("--translate", nargs="*", metavar="FROM:TO", help="Language pairs, e.g. en:pb es:en en:es")
     p_models.add_argument("--voice", nargs="*", metavar="NAME", help="Piper voices, e.g. pt_BR-faber-medium es_MX-ald-medium")
@@ -360,7 +398,7 @@ def main():
         parser.print_help()
         sys.exit(0)
 
-    if args.command in ("serve", "worker", "run", "add"):
+    if args.command in ("serve", "worker", "run", "add", "approve"):
         _apply_ai_mode(args)
 
     if args.command in DISPATCH:

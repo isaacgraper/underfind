@@ -16,6 +16,7 @@ from underfind.backend.core.logger import logger
 from underfind.backend.db.pipeline_repo import PipelineRepository
 from underfind.backend.pipeline.download import VIDEO_SUFFIXES, MediaDownloader, source_updates_from_info
 from underfind.backend.pipeline.headline import auto_highlight, detect_headline
+from underfind.backend.pipeline.export import FolderExporter, WebhookNotifier
 from underfind.backend.pipeline.dub import PiperTtsProvider, TtsProvider, build_tts, default_voice, mix_dub, synthesize_segments
 from underfind.backend.core.niches import load_niche
 from underfind.backend.pipeline.glossary import load_glossary
@@ -37,6 +38,7 @@ from underfind.backend.pipeline.subtitles import build_cues, write_ass, write_sr
 from underfind.backend.pipeline.transcribe import WhisperTranscriber
 from underfind.backend.pipeline.translate import LLMTranslator, SegmentInput, TranslationDraft, TranslationInput, segment_budget
 from underfind.backend.schemas.pipeline import (
+    ExportManifest,
     Headline,
     Job,
     Layout,
@@ -105,6 +107,8 @@ class StageContext:
     translator: Any = None
     tts: Optional[TtsProvider] = None
     ai_mode: str = field(default_factory=current_ai_mode)
+    exporter: FolderExporter = field(default_factory=FolderExporter)
+    notifier: WebhookNotifier = field(default_factory=WebhookNotifier)
     _backends: dict = field(default_factory=dict, repr=False)
 
     def uses_local(self, job: Job, page: Optional[PageProfile]) -> bool:
@@ -667,4 +671,30 @@ def render_stage(
     for name, path in artifacts.items():
         ctx.repo.set_artifact(job.id, name, str(path))
 
+    # Waits at the render review gate unless the page exports automatically.
+    ctx.repo.set_render_approved(job.id, page.auto_approve_render)
     logger.info("Job %s rendered %s (%s layout)", job.id, ", ".join(artifacts), layout.value)
+
+
+def export_stage(
+    job: Job,
+    ctx: StageContext,
+) -> None:
+    """
+    rendered -> exported (after render approval): copies the outputs into the export folder with caption.txt and
+    manifest.json for the batch publisher, then notifies EXPORT_WEBHOOK_URL when set. A retry after a failed
+    webhook reuses the folder already written instead of exporting twice.
+    """
+    page = _require_page(ctx, job)
+    existing = Path(job.artifacts["export_dir"]) / "manifest.json" if job.artifacts.get("export_dir") else None
+
+    if existing and existing.exists():
+        manifest = ExportManifest.model_validate_json(existing.read_text(encoding="utf-8"))
+    else:
+        translation = load_translation(ctx, job.id)
+        reel = job.artifacts.get("reel")
+        duration = probe_duration(Path(reel)) if reel and Path(reel).exists() else None
+        manifest = ctx.exporter.export(job, page, translation, duration_seconds=round(duration, 2) if duration else None)
+        ctx.repo.set_artifact(job.id, "export_dir", manifest.folder)
+
+    ctx.notifier.notify(manifest)

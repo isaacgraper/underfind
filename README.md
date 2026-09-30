@@ -64,6 +64,11 @@ found -> downloaded -> transcribed -> translated -> voiced -> rendered -> export
 | `GET /api/jobs/{id}/transcript` | Transcrição com timestamps, idioma e texto na tela |
 | `GET/PUT /api/jobs/{id}/translation` | Revisão: original x tradução por segmento, legenda do post e hashtags (edição) |
 | `POST /api/jobs/{id}/translation/approve` | Aprova a tradução e libera o job para a narração/legendas |
+| `POST /api/jobs/from-files` | Abre job a partir de imagens/vídeos locais (post, carrossel) |
+| `GET /api/jobs/{id}/files/{nome}` | Pré-visualização dos arquivos (reel, post, carousel_01, ...) |
+| `POST /api/jobs/{id}/render/approve` | Aprova a renderização e libera a exportação |
+| `GET /api/exports` | Últimas exportações (manifests) |
+| `GET /api/niches` | Presets de nicho |
 
 **Etapas automáticas (worker):**
 - `found -> downloaded`: yt-dlp baixa o vídeo uma vez por origem (`data/sources/{plataforma}_{id}/source.mp4`), atualiza metadados (título, legenda, autor, views, likes, duração), calcula o hash perceptual e descarta o job se for reupload de uma origem já usada em outra plataforma.
@@ -78,6 +83,7 @@ python app.py run <JOB_ID>        # avança um job até a próxima etapa manual
 python app.py models --translate en:pb es:en en:es --voice pt_BR-faber-medium   # baixa modelos locais uma vez
 python app.py --online            # servidor liberando IA online para páginas/jobs com "Somente IA local" desmarcado (padrão: --local)
 python app.py worker --local      # worker travado em IA local
+python app.py approve <JOB_ID> --run   # aprova a revisão pendente (tradução ou renderização) e continua
 ```
 
 Requer ffmpeg no PATH (o pacote `imageio-ffmpeg` fornece um binário como fallback). Instagram e TikTok costumam exigir cookies de login: `YTDLP_COOKIES_FILE`.

@@ -158,3 +158,8 @@ EDGE_TTS_VOICES: Dict[str, str] = {
     "de": "de-DE-ConradNeural",
     "it": "it-IT-DiegoNeural",
 }
+
+# Export (hand-off to the batch publisher)
+EXPORTS_DIR = DATA_DIR / "exports"
+EXPORT_SCHEMA_VERSION: int = 1
+EXPORT_WEBHOOK_TIMEOUT_SECONDS: float = 15.0

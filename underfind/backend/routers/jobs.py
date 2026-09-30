@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Dict
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from fastapi.responses import FileResponse
 
 from underfind.backend.core.errors import InvalidTransitionError, NotFoundError
 from underfind.backend.core.logger import logger
@@ -14,6 +15,7 @@ from underfind.backend.schemas.pipeline import (
     AssignPageRequest,
     CreateJobFromFilesRequest,
     CreateJobFromUrlRequest,
+    ExportManifest,
     Job,
     JobEvent,
     JobStatus,
@@ -255,3 +257,42 @@ def approve_job_translation(
 ) -> Translation:
     """Opens the review gate: the worker picks the job up for voicing on its next poll."""
     return update_job_translation(job_id, UpdateTranslationRequest(approve=True), repo)
+
+
+@router.post("/jobs/{job_id}/render/approve", response_model=Job)
+def approve_job_render(
+    job_id: str,
+    repo: PipelineRepository = Depends(get_pipeline_repo),
+) -> Job:
+    """Opens the render review gate: the worker exports the job on its next poll."""
+    job = repo.get_job(job_id)
+
+    if job.status != JobStatus.RENDERED:
+        raise InvalidTransitionError(f"Only rendered jobs can be approved for export (now '{job.status.value}').")
+
+    return repo.set_render_approved(job_id, True)
+
+
+@router.get("/jobs/{job_id}/files/{name}")
+def get_job_file(
+    job_id: str,
+    name: str,
+    repo: PipelineRepository = Depends(get_pipeline_repo),
+) -> FileResponse:
+    """Serves one of the job's artifacts by name (reel, post, carousel_01, frame, ...) for previews."""
+    job = repo.get_job(job_id)
+    path = job.artifacts.get(name)
+
+    if not path or not Path(path).is_file():
+        raise NotFoundError(f"Job '{job_id}' has no file '{name}'. Available: {sorted(job.artifacts)}")
+
+    return FileResponse(path)
+
+
+@router.get("/exports", response_model=List[ExportManifest])
+def list_exports(
+    limit: int = Query(50, ge=1, le=500),
+) -> List[ExportManifest]:
+    """Most recent exports (manifests in the export folder)."""
+    from underfind.backend.pipeline.export import FolderExporter
+    return FolderExporter().list_exports(limit)

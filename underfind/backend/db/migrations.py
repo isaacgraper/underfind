@@ -194,12 +194,22 @@ def _v5_media_and_branding(conn: sqlite3.Connection) -> None:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
 
 
+def _v6_render_review(conn: sqlite3.Connection) -> None:
+    """Render approval gate (job) and auto-approval (page) before export."""
+    if not _column_exists(conn, "jobs", "render_approved"):
+        conn.execute("ALTER TABLE jobs ADD COLUMN render_approved INTEGER NOT NULL DEFAULT 0")
+
+    if not _column_exists(conn, "page_profiles", "auto_approve_render"):
+        conn.execute("ALTER TABLE page_profiles ADD COLUMN auto_approve_render INTEGER NOT NULL DEFAULT 0")
+
+
 MIGRATIONS: List[Tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (1, _v1_localization_pipeline),
     (2, _v2_worker_and_media),
     (3, _v3_translation_review),
     (4, _v4_local_only),
     (5, _v5_media_and_branding),
+    (6, _v6_render_review),
 ]
 
 

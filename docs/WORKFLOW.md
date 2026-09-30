@@ -32,7 +32,7 @@ Local-first automation for any niche: find international posts that work (reels,
 | 6 | **Translate** | transcript → timing-fit translated segments + localized caption/hashtags | local OPUS-MT on CTranslate2 (optional: LLM chain) + GTA VI glossary (Lucia, Jason, Vice City, Leonida stay untranslated) | `translated` | 4 (done) |
 | 7 | **Voice** | translation → burned subtitles or dubbed track | ASS subtitles / Piper TTS (local) | `voiced` | 4 (done) |
 | 8 | **Render** | video + page identity → 1080×1920 final | ffmpeg + Pillow (avatar, name, @ on top, video below) | `rendered` | 5 |
-| 9 | **Export** | final → `final.mp4` + `manifest.json` in the export folder | file drop or publisher API | `exported` | 6 |
+| 9 | **Export** | rendered files → export folder with `manifest.json` + `caption.txt`, optional webhook | folder drop (+ `EXPORT_WEBHOOK_URL`) | `exported` | 6 (done) |
 | 10 | **Publish** | manifest → post | batch publisher (external) | — | external |
 
 ### Storage layout
@@ -44,21 +44,43 @@ data/jobs/{job_id}/translation.json, subs.ass, dub.wav, final.mp4, manifest.json
 
 Source-level artifacts are shared by every job (page) created from the same video, so a source is downloaded and transcribed once.
 
-### Manifest handed to the publisher
+### Export folder (what the batch publisher reads)
+
+```
+data/exports/                      (EXPORT_DIR)
+  exports.csv                      one row per export: time, job, page, deliverables, folder, caption line, source url
+  <page handle>/
+    20260930-120000_<job id>/      appears only when complete (written under .tmp_* and renamed)
+      reel.mp4  post.jpg  carousel_01.jpg ...
+      caption.txt                  full post text
+      manifest.json
+```
 
 ```json
 {
+  "schema_version": 1,
   "job_id": "3f9a1c2b7e01",
-  "page": "gta6br",
-  "video": "data/jobs/3f9a1c2b7e01/final.mp4",
-  "caption": "O mapa de GTA VI é MAIOR do que parecia ...",
-  "hashtags": ["#gta6", "#gtavi", "#vicecity"],
-  "source": {"platform": "instagram", "url": "https://www.instagram.com/reel/...", "author": "@gta6news"},
-  "duration_seconds": 34,
+  "exported_at": "2026-09-30T12:00:00+00:00",
+  "folder": "data/exports/gtavibrasil/20260930-120000_3f9a1c2b7e01",
+  "page": {"handle": "gtavibrasil", "display_name": "GTA VI Brasil", "language": "pt-BR"},
   "language": "pt-BR",
-  "priority_score": 87.4
+  "deliverables": [
+    {"kind": "reel", "files": ["reel.mp4"]},
+    {"kind": "post", "files": ["post.jpg"]},
+    {"kind": "carousel", "files": ["carousel_01.jpg", "carousel_02.jpg"]}
+  ],
+  "caption": "O trailer 3 chegou 🔥 Qual detalhe você viu?\n\n📸 @gta6news\n\n#gta6 #gtavi",
+  "caption_body": "O trailer 3 chegou 🔥 Qual detalhe você viu?",
+  "hashtags": ["#gta6", "#gtavi"],
+  "headline": "SE SEU FILHO NASCER EM 19 DE NOVEMBRO DE 2026...",
+  "duration_seconds": 8.0,
+  "local_ai": true,
+  "source": {"platform": "instagram", "url": "https://www.instagram.com/p/...", "author": "gta6news", "published_at": "..."},
+  "source_metrics": {"views": 900000, "likes": 70000, "comments": 1200, "followers": 250000}
 }
 ```
+
+The page's `caption_footer` is appended to every caption and fills `{source_author}`, `{source_url}` and `{platform}` (credit lines). With `EXPORT_WEBHOOK_URL` set, each manifest is also POSTed there (publisher API, n8n webhook); a failed webhook is retried without exporting the folder twice.
 
 ## 2. Automation
 
@@ -70,14 +92,14 @@ Source-level artifacts are shared by every job (page) created from the same vide
 | **Keyword scan** | every 4h | YouTube Shorts search over the GTA VI keyword list (~20 searches/day = 2,000 units, well under the 10k quota) |
 | **Outlier discovery** | daily | vidIQ outlier search on IG/TikTok → proposes new pages for the seed list (approved manually) |
 | **Pipeline worker** | continuous | claims jobs and runs each stage until a review gate |
-| **Export sweep** | every 30 min | moves approved `rendered` jobs to `exported`, drops files in the publisher folder |
+| **Export** | every worker poll | exports approved `rendered` jobs into the publisher folder (+ webhook) |
 | **Metrics sync** | daily | pulls performance of published posts → adjusts scoring weights |
 
 ### Review gates
 
 1. **Pick** (optional): auto-accept candidates above a score threshold, queue the rest for a click.
 2. **Translation review** (on at the start): side-by-side source/translation, edit, approve.
-3. **Render approval**: preview the final file, approve or reject.
+3. **Render approval**: preview the outputs (`GET /api/jobs/{id}/files/{reel|post|carousel_01}`), then `POST /api/jobs/{id}/render/approve` or `python app.py approve <job>`; to redo, move the job back (`PATCH /status`). Pages with `auto_approve_render` skip it.
 
 Automation levels, switchable per page:
 
@@ -124,7 +146,7 @@ pages: ["gta6br", "gta6es"]   # auto-assign targets
 2. **06:05–06:30:** worker downloads, transcribes, translates for 2 pages → 24 jobs at translation review.
 3. **Review (~10 min):** approve/edit 24 translations.
 4. Worker voices and renders → render approval (or skipped at Level 2).
-5. Export sweep drops the approved `final.mp4` + `manifest.json` files into the publisher folder.
+5. The worker exports approved jobs: files + `caption.txt` + `manifest.json` in the publisher folder.
 6. The batch publisher picks them up, schedules and posts.
 7. Overnight: metrics sync scores yesterday's posts → ranking adjusts for tomorrow's scans.
 
@@ -183,3 +205,15 @@ Limits of local translation versus an LLM: literal phrasing (less slang adaptati
 | Job | same checkbox in the "Localizar" panel of the video modal, `local_only` on `POST /api/jobs`, `PATCH /api/jobs/{id}/local-only` | inherits page | Overrides the page for one job (`null` inherits again). |
 
 Online means: translation through the free LLM chain (NVIDIA → Atria → OpenRouter in `config/llm.yaml`; Claude only as an explicit role) with condensing of lines that overrun, and edge-tts voices for dubs. Each `translation.json` records `local: true/false` and the model that produced it; `dub.json` records the voice backend. `GET /api/health` reports the server's `ai_mode`.
+
+## 6. Build phases
+
+| Phase | Scope | Status |
+|---|---|---|
+| 1 | Jobs, used-source registry, quota | done |
+| 3 | Download + transcribe (+ images, carousels, OCR, headline) | done |
+| 4 | Translate + voice (local by default) | done |
+| 5 | Render: headline card / letterbox / full bleed as reel, post, carousel | done |
+| 6 | Export folder + manifest + webhook, render review gate | done |
+| 7 | Automated sourcing: niche seed pages and keywords, scoring, scheduled scans | next |
+| 8 | Frontend refactor (pipeline board, review screens, pages/templates) + end-to-end tests through the real UI | planned |
