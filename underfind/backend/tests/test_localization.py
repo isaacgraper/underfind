@@ -131,7 +131,7 @@ def _runner(repo: PipelineRepository, tmp_path: Path, clip: Path, translator=Non
 
 
 def _page(repo: PipelineRepository, **kwargs) -> PageProfile:
-    return repo.save_page(PageProfile(display_name="GTA VI Brasil", handle="gta6br", language="pt-BR", default_hashtags=["#gta6", "#gtavi"], **kwargs))
+    return repo.save_page(PageProfile(display_name="GTA VI Brasil", handle="gta6br", language="pt-BR", niche="gta6", default_hashtags=["#gta6", "#gtavi"], **kwargs))
 
 
 # ------------------------------------------------------------ budgets & subtitles

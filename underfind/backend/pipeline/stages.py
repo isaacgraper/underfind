@@ -15,6 +15,7 @@ from underfind.backend.core.logger import logger
 from underfind.backend.db.pipeline_repo import PipelineRepository
 from underfind.backend.pipeline.download import YtDlpDownloader, source_updates_from_info
 from underfind.backend.pipeline.dub import PiperTtsProvider, TtsProvider, build_tts, default_voice, mix_dub, synthesize_segments
+from underfind.backend.core.niches import load_niche
 from underfind.backend.pipeline.glossary import load_glossary
 from underfind.backend.pipeline.media import extract_audio, extract_frame, has_audio_stream, probe_duration
 from underfind.backend.pipeline.ocr import OnScreenTextDetector
@@ -241,6 +242,11 @@ def save_translation(ctx: StageContext, job_id: str, translation: Translation) -
     return path
 
 
+def _niche_hashtags(page: PageProfile) -> List[str]:
+    preset = load_niche(page.niche)
+    return preset.hashtags if preset else []
+
+
 def _merge_hashtags(generated: List[str], defaults: List[str]) -> List[str]:
     merged: List[str] = []
     seen: set[str] = set()
@@ -267,7 +273,7 @@ def translate_stage(
     _require_source(job)
     page = _require_page(ctx, job)
     transcript = _load_transcript(ctx, job)
-    glossary = load_glossary()
+    glossary = load_glossary(page.niche, page.glossary)
     local = ctx.uses_local(job, page)
     translator = ctx.translator_for(local)
 
@@ -323,7 +329,7 @@ def translate_stage(
             for s in inputs
         ],
         caption=draft.caption.strip(),
-        hashtags=_merge_hashtags(draft.hashtags, page.default_hashtags),
+        hashtags=_merge_hashtags(draft.hashtags, [*page.default_hashtags, *_niche_hashtags(page)]),
         onscreen_text=[TranslatedOnScreenText(source=o.source, text=o.text) for o in draft.onscreen_text],
         approved=page.auto_approve_translation,
         approved_at=datetime.now(timezone.utc).isoformat() if page.auto_approve_translation else None,

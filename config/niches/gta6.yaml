@@ -1,0 +1,34 @@
+# Niche preset: what to look for, which names never get translated, default hashtags.
+# Copy this file to config/niches/<name>.yaml for another niche and set `niche: <name>` on the page.
+name: gta6
+description: Grand Theft Auto VI news, leaks, trailers, memes and AI art
+keywords:
+  include: ["gta 6", "gta vi", "grand theft auto vi", "vice city", "lucia", "jason", "leonida", "rockstar trailer"]
+  exclude: ["gta 5", "gta v", "gta online", "mod", "fivem", "roleplay"]
+seed_pages:
+  instagram: []
+  tiktok: []
+  youtube_channels: []
+regions: ["US", "GB", "ES", "MX", "DE", "FR"]
+hashtags: ["#gta6", "#gtavi"]
+glossary:
+  - GTA VI
+  - GTA 6
+  - Grand Theft Auto VI
+  - Grand Theft Auto
+  - Rockstar Games
+  - Rockstar
+  - Take-Two
+  - Vice City
+  - Leonida
+  - Leonida Keys
+  - Port Gellhorn
+  - Ambrosia
+  - Grassrivers
+  - Mount Kalaga
+  - Lucia
+  - Jason
+  - GTA Online
+  - San Andreas
+  - PS5
+  - Xbox Series X|S

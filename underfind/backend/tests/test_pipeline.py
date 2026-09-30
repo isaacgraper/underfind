@@ -200,8 +200,8 @@ def test_job_service_from_video_item(repo: PipelineRepository):
 
 
 def test_pages_and_templates(repo: PipelineRepository):
-    template = repo.save_template(RenderTemplate(name="tweet-style", avatar_size=120))
-    assert template.id is not None and template.avatar_size == 120
+    template = repo.save_template(RenderTemplate(name="headline-card", layout="headline_card", card_ratio=0.4))
+    assert template.id is not None and template.card_ratio == 0.4 and template.layout.value == "headline_card"
 
     page = repo.save_page(PageProfile(display_name="GTA 6 España", handle="@gta6es", language="es", template_id=template.id, default_hashtags=["#gta6"]))
     assert page.handle == "gta6es"

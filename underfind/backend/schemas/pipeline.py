@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Optional, List, Dict
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from underfind.backend.core.constants import (
     DEFAULT_TARGET_LANGUAGE,
@@ -14,6 +14,23 @@ class Platform(str, Enum):
     YOUTUBE = "youtube"
     INSTAGRAM = "instagram"
     TIKTOK = "tiktok"
+    LOCAL = "local"
+
+
+class MediaType(str, Enum):
+    VIDEO = "video"
+    IMAGE = "image"
+    CAROUSEL = "carousel"
+
+
+class Layout(str, Enum):
+    AUTO = "auto"
+    HEADLINE_CARD = "headline_card"
+    LETTERBOX = "letterbox"
+    FULL_BLEED = "full_bleed"
+
+
+OUTPUT_KINDS: List[str] = ["reel", "post", "carousel"]
 
 
 class JobStatus(str, Enum):
@@ -60,6 +77,8 @@ class SourceVideo(BaseModel):
     language: Optional[str] = None
     phash: Optional[str] = Field(default=None, description="64-bit perceptual hash (hex) of a reference frame")
     has_onscreen_text: Optional[bool] = None
+    media_type: Optional[MediaType] = None
+    media_files: List[str] = Field(default_factory=list, description="Downloaded media file names inside the source folder, in post order")
 
     @property
     def key(self) -> str:
@@ -67,19 +86,33 @@ class SourceVideo(BaseModel):
 
 
 class RenderTemplate(BaseModel):
+    """
+    Visual style of a page's posts. Layouts, from the reference posts:
+      headline_card  media on top, black card below with a brand tag between gradient lines and a big condensed
+                     headline whose highlighted words (*like this*) get a gradient
+      letterbox      media centered on the background, untouched (memes, infographics, AI art with baked-in labels)
+      full_bleed     video fills the frame (trailers, gameplay), optional subtitles
+      auto           headline_card when the source has a headline band, full_bleed for vertical video, else letterbox
+    """
+
     id: Optional[int] = None
     name: str
+    layout: Layout = Layout.AUTO
     width: int = 1080
     height: int = 1920
+    post_height: int = 1350
     background_color: str = "#000000"
-    header_height: int = 260
-    avatar_size: int = 140
-    name_font: str = "Inter-Bold"
-    name_font_size: int = 52
-    name_color: str = "#FFFFFF"
-    handle_font_size: int = 38
-    handle_color: str = "#A1A1AA"
-    show_verified_badge: bool = True
+    font_path: Optional[str] = Field(default=None, description="TTF/OTF for headline and brand tag; bundled Anton when empty")
+    headline_color: str = "#FFFFFF"
+    highlight_colors: List[str] = Field(default_factory=lambda: ["#D946EF", "#FB923C"], description="Gradient for *highlighted* words")
+    headline_max_font_size: int = 150
+    headline_min_font_size: int = 64
+    headline_max_lines: int = 5
+    card_ratio: float = Field(default=0.36, ge=0.2, le=0.6, description="Share of the frame used by the headline card")
+    brand_tag_font_size: int = 44
+    brand_tag_colors: List[str] = Field(default_factory=lambda: ["#C026D3", "#F97316"])
+    still_seconds: float = Field(default=8.0, ge=2.0, le=60.0, description="Reel length for image posts (per image in carousels)")
+    ken_burns_zoom: float = Field(default=1.08, ge=1.0, le=1.5)
     video_fit: str = Field(default="fit", pattern="^(fit|fill)$")
     subtitle_font: str = "Inter-Bold"
     subtitle_font_size: int = 64
@@ -98,6 +131,21 @@ class PageProfile(BaseModel):
     default_hashtags: List[str] = Field(default_factory=list)
     caption_footer: Optional[str] = None
     tts_voice: Optional[str] = Field(default=None, description="TTS voice for dub mode; defaults by language")
+    niche: Optional[str] = Field(default=None, description="Niche preset in config/niches/<name>.yaml (glossary, keywords, hashtags)")
+    brand_tag: Optional[str] = Field(default=None, description="Text in the headline card's brand line; defaults to the handle in capitals")
+    glossary: List[str] = Field(default_factory=list, description="Extra terms that must never be translated (on top of the niche's)")
+    outputs: List[str] = Field(default_factory=lambda: ["reel"], description="Any of reel (9:16 video), post (4:5 image), carousel (4:5 images)")
+
+    @field_validator("outputs")
+    @classmethod
+    def _valid_outputs(cls, value: List[str]) -> List[str]:
+        unknown = [v for v in value if v not in OUTPUT_KINDS]
+
+        if unknown or not value:
+            raise ValueError(f"outputs must be a non-empty subset of {OUTPUT_KINDS}; got {value}")
+
+        return list(dict.fromkeys(value))
+    audio_bed_path: Optional[str] = Field(default=None, description="Audio for image reels; silent when empty (add trending audio when publishing)")
     auto_approve_translation: bool = Field(default=False, description="Skip the translation review gate for this page")
     local_only: bool = Field(default=True, description="Only local AI models for this page's jobs (checked by default)")
     active: bool = True
@@ -179,6 +227,19 @@ class OnScreenText(BaseModel):
     at_seconds: float
     text: str
     confidence: float
+    box: Optional[List[int]] = Field(default=None, description="[x0, y0, x1, y1] in media pixels")
+    media_file: Optional[str] = None
+
+
+class Headline(BaseModel):
+    """Headline band detected in the source media (the part a modeled post re-types in its own card)."""
+
+    text: str
+    brand_text: Optional[str] = None
+    media_file: Optional[str] = None
+    region: Optional[List[int]] = Field(default=None, description="[x0, y0, x1, y1] covering the brand tag and headline lines")
+    position: Optional[str] = Field(default=None, description="top | bottom when the band spans the media width and can be cropped away")
+    media_size: Optional[List[int]] = None
 
 
 class Transcript(BaseModel):
@@ -191,6 +252,7 @@ class Transcript(BaseModel):
         default=None,
         description="Burned-in text found by OCR sampling; None when OCR is not installed",
     )
+    headline: Optional[Headline] = None
 
     @property
     def text(self) -> str:
@@ -231,6 +293,8 @@ class Translation(BaseModel):
     mode: str
     model: Optional[str] = None
     segments: List[TranslatedSegment] = Field(default_factory=list)
+    headline: str = Field(default="", description="Translated headline for the card; *word* marks gradient highlights")
+    headline_source: str = ""
     caption: str = ""
     hashtags: List[str] = Field(default_factory=list)
     onscreen_text: List[TranslatedOnScreenText] = Field(default_factory=list)
@@ -246,6 +310,20 @@ class SegmentEdit(BaseModel):
 
 class UpdateTranslationRequest(BaseModel):
     segments: Optional[List[SegmentEdit]] = None
+    headline: Optional[str] = None
     caption: Optional[str] = None
     hashtags: Optional[List[str]] = None
     approve: Optional[bool] = None
+
+
+class CreateJobFromFilesRequest(BaseModel):
+    """Local media already on this machine (saved posts, your own material)."""
+
+    files: List[str] = Field(min_length=1)
+    source_url: Optional[str] = Field(default=None, description="Original post URL, for credit and the used-source registry")
+    caption: Optional[str] = None
+    author_handle: Optional[str] = None
+    page_id: Optional[int] = None
+    mode: str = Field(default=DEFAULT_LOCALIZATION_MODE, pattern="^(subtitles|dub)$")
+    force: bool = False
+    local_only: Optional[bool] = None

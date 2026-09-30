@@ -4,12 +4,26 @@ from typing import List
 from fastapi import APIRouter, Depends, Query
 
 from underfind.backend.core.errors import NotFoundError
+from underfind.backend.core.niches import Niche, list_niches, load_niche
 from underfind.backend.core.quota import QuotaTracker
 from underfind.backend.db.pipeline_repo import PipelineRepository
 from underfind.backend.dependencies import get_pipeline_repo, get_youtube_quota
 from underfind.backend.schemas.pipeline import PageProfile, QuotaStatus, RenderTemplate
 
 router = APIRouter(tags=["Pages, Templates & Quota"])
+
+
+def _check_niche(name: str | None) -> None:
+    try:
+        load_niche(name)
+    except KeyError as err:
+        raise NotFoundError(f"{err.args[0]} (available: {', '.join(list_niches()) or 'none'})") from err
+
+
+@router.get("/niches", response_model=List[Niche])
+def get_niches() -> List[Niche]:
+    """Niche presets from config/niches/*.yaml."""
+    return [load_niche(name) for name in list_niches()]
 
 
 @router.get("/pages", response_model=List[PageProfile])
@@ -25,7 +39,8 @@ def create_page(
     page: PageProfile,
     repo: PipelineRepository = Depends(get_pipeline_repo),
 ) -> PageProfile:
-    """Creates a target page identity (display name, handle, avatar, language, template)."""
+    """Creates a target page identity (display name, handle, language, niche, brand tag, template, outputs)."""
+    _check_niche(page.niche)
     return repo.save_page(page.model_copy(update={"id": None}))
 
 
@@ -48,6 +63,7 @@ def update_page(
     page: PageProfile,
     repo: PipelineRepository = Depends(get_pipeline_repo),
 ) -> PageProfile:
+    _check_niche(page.niche)
     return repo.save_page(page.model_copy(update={"id": page_id}))
 
 

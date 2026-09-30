@@ -175,11 +175,31 @@ def _v4_local_only(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN local_only INTEGER")
 
 
+def _v5_media_and_branding(conn: sqlite3.Connection) -> None:
+    """Image/carousel sources; page niche, brand tag, glossary, outputs and audio bed."""
+    columns = {
+        "source_videos": [("media_type", "TEXT"), ("media_json", "TEXT")],
+        "page_profiles": [
+            ("niche", "TEXT"),
+            ("brand_tag", "TEXT"),
+            ("glossary_json", "TEXT"),
+            ("outputs_json", "TEXT"),
+            ("audio_bed_path", "TEXT"),
+        ],
+    }
+
+    for table, cols in columns.items():
+        for name, sql_type in cols:
+            if not _column_exists(conn, table, name):
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
+
+
 MIGRATIONS: List[Tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (1, _v1_localization_pipeline),
     (2, _v2_worker_and_media),
     (3, _v3_translation_review),
     (4, _v4_local_only),
+    (5, _v5_media_and_branding),
 ]
 
 

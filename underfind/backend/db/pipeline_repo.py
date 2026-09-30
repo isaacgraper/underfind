@@ -19,6 +19,7 @@ from underfind.backend.core.utils import hamming_distance_hex
 from underfind.backend.db.migrations import apply_migrations
 from underfind.backend.schemas.pipeline import (
     Job,
+    MediaType,
     JobEvent,
     JobStatus,
     PageProfile,
@@ -34,6 +35,29 @@ _SOURCE_FIELDS = [
     "thumbnail_url", "views", "likes", "comments_count", "followers", "duration_seconds",
     "published_at", "language", "phash", "has_onscreen_text",
 ]
+# Column list for source_videos: scalar model fields plus the JSON/enum media columns.
+_SOURCE_COLUMNS = [*_SOURCE_FIELDS, "media_type", "media_json"]
+
+
+def _source_row_values(source: SourceVideo) -> Dict[str, Any]:
+    values = source.model_dump()
+    values["platform"] = source.platform.value
+    values["media_type"] = source.media_type.value if source.media_type else None
+    # Empty list means "unknown yet": stored as NULL so an upsert never erases known files.
+    values["media_json"] = json.dumps(source.media_files) if source.media_files else None
+    return values
+
+
+def _source_from_values(get) -> SourceVideo:
+    data = {field: get(field) for field in _SOURCE_FIELDS}
+    data["platform"] = Platform(data["platform"])
+    media_type = get("media_type")
+    media_json = get("media_json")
+    return SourceVideo(
+        **data,
+        media_type=MediaType(media_type) if media_type else None,
+        media_files=json.loads(media_json) if media_json else [],
+    )
 
 
 def _now() -> str:
@@ -117,9 +141,7 @@ class PipelineRepository:
 
     @staticmethod
     def _row_to_source(row: sqlite3.Row) -> SourceVideo:
-        data = {field: row[field] for field in _SOURCE_FIELDS}
-        data["platform"] = Platform(data["platform"])
-        return SourceVideo(**data)
+        return _source_from_values(lambda column: row[column])
 
     def upsert_source(
         self,
@@ -127,20 +149,19 @@ class PipelineRepository:
     ) -> SourceVideo:
         """Inserts a source video or refreshes its metadata, never overwriting known values with nulls."""
         now = _now()
-        values = source.model_dump()
-        values["platform"] = source.platform.value
-        update_cols = [f for f in _SOURCE_FIELDS if f not in ("platform", "source_id")]
+        values = _source_row_values(source)
+        update_cols = [c for c in _SOURCE_COLUMNS if c not in ("platform", "source_id")]
 
         with self._get_connection() as conn:
             conn.execute(
                 f"""
-                INSERT INTO source_videos (source_key, {", ".join(_SOURCE_FIELDS)}, created_at, updated_at)
-                VALUES (?, {", ".join("?" for _ in _SOURCE_FIELDS)}, ?, ?)
+                INSERT INTO source_videos (source_key, {", ".join(_SOURCE_COLUMNS)}, created_at, updated_at)
+                VALUES (?, {", ".join("?" for _ in _SOURCE_COLUMNS)}, ?, ?)
                 ON CONFLICT(source_key) DO UPDATE SET
                     {", ".join(f"{c} = COALESCE(excluded.{c}, {c})" for c in update_cols)},
                     updated_at = excluded.updated_at
                 """,
-                (source.key, *[values[f] for f in _SOURCE_FIELDS], now, now)
+                (source.key, *[values[c] for c in _SOURCE_COLUMNS], now, now)
             )
             conn.commit()
 
@@ -331,7 +352,7 @@ class PipelineRepository:
         with self._get_connection() as conn:
             rows = conn.execute(
                 f"""
-                SELECT j.*, {", ".join(f"s.{f} AS s_{f}" for f in _SOURCE_FIELDS)}
+                SELECT j.*, {", ".join(f"s.{c} AS s_{c}" for c in _SOURCE_COLUMNS)}
                 FROM jobs j JOIN source_videos s ON s.source_key = j.source_key
                 {where}
                 ORDER BY j.updated_at DESC
@@ -343,9 +364,7 @@ class PipelineRepository:
         jobs: List[Job] = []
 
         for row in rows:
-            source_data = {f: row[f"s_{f}"] for f in _SOURCE_FIELDS}
-            source_data["platform"] = Platform(source_data["platform"])
-            jobs.append(self._row_to_job(row, SourceVideo(**source_data)))
+            jobs.append(self._row_to_job(row, _source_from_values(lambda column, r=row: r[f"s_{column}"])))
 
         return jobs
 
@@ -579,6 +598,11 @@ class PipelineRepository:
             tts_voice=row["tts_voice"],
             auto_approve_translation=bool(row["auto_approve_translation"]),
             local_only=bool(row["local_only"]),
+            niche=row["niche"],
+            brand_tag=row["brand_tag"],
+            glossary=json.loads(row["glossary_json"]) if row["glossary_json"] else [],
+            outputs=json.loads(row["outputs_json"]) if row["outputs_json"] else ["reel"],
+            audio_bed_path=row["audio_bed_path"],
             active=bool(row["active"]),
         )
 
@@ -594,7 +618,8 @@ class PipelineRepository:
         values = (
             page.display_name, page.handle.lstrip("@"), page.avatar_path, page.language, page.template_id,
             json.dumps(page.default_hashtags), page.caption_footer, page.tts_voice,
-            int(page.auto_approve_translation), int(page.local_only), int(page.active),
+            int(page.auto_approve_translation), int(page.local_only), page.niche, page.brand_tag,
+            json.dumps(page.glossary), json.dumps(page.outputs), page.audio_bed_path, int(page.active),
         )
 
         with self._get_connection() as conn:
@@ -604,9 +629,10 @@ class PipelineRepository:
                     INSERT INTO page_profiles (
                         display_name, handle, avatar_path, language, template_id,
                         default_hashtags_json, caption_footer, tts_voice, auto_approve_translation,
-                        local_only, active, created_at, updated_at
+                        local_only, niche, brand_tag, glossary_json, outputs_json, audio_bed_path,
+                        active, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (*values, now, now)
                 )
@@ -617,7 +643,8 @@ class PipelineRepository:
                     UPDATE page_profiles SET
                         display_name = ?, handle = ?, avatar_path = ?, language = ?, template_id = ?,
                         default_hashtags_json = ?, caption_footer = ?, tts_voice = ?,
-                        auto_approve_translation = ?, local_only = ?, active = ?, updated_at = ?
+                        auto_approve_translation = ?, local_only = ?, niche = ?, brand_tag = ?,
+                        glossary_json = ?, outputs_json = ?, audio_bed_path = ?, active = ?, updated_at = ?
                     WHERE id = ?
                     """,
                     (*values, now, page.id)
