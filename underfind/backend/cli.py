@@ -192,11 +192,43 @@ def cmd_serve(args: argparse.Namespace) -> None:
     start()
 
 
+def cmd_worker(args: argparse.Namespace) -> None:
+    import threading
+    from underfind.backend.pipeline.runner import get_default_runner
+
+    console.print("[bold #ff5500]Pipeline worker running. Ctrl+C to stop.[/]")
+    stop_event = threading.Event()
+
+    try:
+        get_default_runner().run_forever(stop_event, interval=args.interval)
+    except KeyboardInterrupt:
+        stop_event.set()
+
+
+def cmd_run(args: argparse.Namespace) -> None:
+    from underfind.backend.pipeline.runner import get_default_runner
+
+    from underfind.backend.core.errors import NotFoundError
+
+    runner = get_default_runner()
+
+    try:
+        job = runner.run_until_blocked(args.job_id) if not args.once else runner.run_next(args.job_id)
+    except NotFoundError as err:
+        console.print(f"[bold #ef4444]{err}[/]")
+        sys.exit(1)
+
+    style = "#10b981" if job.status.value not in ("failed", "discarded") else "#ef4444"
+    console.print(f"Job [bold]{job.id}[/] -> [bold {style}]{job.status.value}[/]" + (f"  {job.error}" if job.error else ""))
+
+
 DISPATCH: Dict[str, Callable[[argparse.Namespace], None]] = {
     "search": cmd_search,
     "trending": cmd_trending,
     "blueprint": cmd_blueprint,
     "serve": cmd_serve,
+    "worker": cmd_worker,
+    "run": cmd_run,
 }
 
 
@@ -230,6 +262,13 @@ def main():
     p_bp.add_argument("--json", action="store_true", help="Output JSON format")
 
     subparsers.add_parser("serve", help="Start the FastAPI backend server")
+
+    p_worker = subparsers.add_parser("worker", help="Run the localization pipeline worker (polls and advances jobs)")
+    p_worker.add_argument("--interval", type=float, default=None, help="Seconds between polls")
+
+    p_run = subparsers.add_parser("run", help="Advance one localization job through its automated stages")
+    p_run.add_argument("job_id", help="Job ID")
+    p_run.add_argument("--once", action="store_true", help="Run only the next stage")
 
     args = parser.parse_args()
 

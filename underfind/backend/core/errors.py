@@ -44,3 +44,30 @@ class SourceAlreadyUsedError(ValueError):
 
 class NotFoundError(LookupError):
     """Raised when a requested pipeline entity does not exist."""
+
+
+class PermanentStageError(RuntimeError):
+    """A pipeline stage failure that retrying will not fix (private/removed video, login wall, bad input)."""
+
+
+class DuplicateSourceError(PermanentStageError):
+    """Raised after download when the video matches an already used source on another platform."""
+
+    def __init__(
+        self,
+        source_key: str,
+        duplicate_of: str,
+        existing_job_id: str,
+        distance: int,
+    ):
+        self.source_key = source_key
+        self.duplicate_of = duplicate_of
+        self.existing_job_id = existing_job_id
+        self.distance = distance
+        super().__init__(
+            f"Source {source_key} is a near-duplicate of {duplicate_of} (hash distance {distance}, job {existing_job_id})."
+        )
+
+
+class MediaToolError(RuntimeError):
+    """Raised when ffmpeg fails or is unavailable."""

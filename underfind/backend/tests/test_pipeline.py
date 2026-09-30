@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from underfind.backend.core.errors import InvalidTransitionError, NotFoundError, SourceAlreadyUsedError
 from underfind.backend.core.utils import parse_source_url, hamming_distance_hex
 from underfind.backend.db.database import CacheManager
+from underfind.backend.db.migrations import MIGRATIONS
 from underfind.backend.db.pipeline_repo import PipelineRepository, check_transition
 from underfind.backend.dependencies import get_pipeline_repo
 from underfind.backend.main import app
@@ -228,7 +229,7 @@ def test_migration_upgrades_legacy_database(tmp_path: Path):
     CacheManager(db_path=db_path)
 
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == MIGRATIONS[-1][0]
         assert conn.execute("SELECT query_key, video_id FROM query_videos").fetchall() == [("BR:1:gta 6", "v1")]
         assert "job_id" in [r[1] for r in conn.execute("PRAGMA table_info(ideas_board)")]
 

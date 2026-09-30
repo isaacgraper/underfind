@@ -87,3 +87,24 @@ YOUTUBE_QUOTA_COSTS: Dict[str, int] = {
 }
 API_MAX_RETRIES: int = 3
 API_BACKOFF_BASE_SECONDS: float = 1.0
+
+# Pipeline Worker
+STAGE_MAX_ATTEMPTS: int = 3
+STAGE_BACKOFF_BASE_SECONDS: float = 5.0
+JOB_LOCK_STALE_MINUTES: int = 60
+WORKER_POLL_INTERVAL_SECONDS: float = 30.0
+WORKER_MAX_PARALLEL_JOBS: int = 2
+
+# Download (yt-dlp)
+YTDLP_FORMAT: str = "bv*[height<=1920][ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b"
+PHASH_FRAME_SECONDS: float = 1.0
+
+# Transcription (faster-whisper)
+DEFAULT_WHISPER_MODEL: str = "small"
+DEFAULT_WHISPER_DEVICE: str = "auto"
+DEFAULT_WHISPER_COMPUTE_TYPE: str = "int8"
+
+# On-screen text detection (optional OCR)
+OCR_SAMPLE_FRAMES: int = 6
+OCR_MIN_CONFIDENCE: float = 0.6
+OCR_MIN_TEXT_LENGTH: int = 3

@@ -16,8 +16,8 @@ Find international GTA VI reels/shorts, translate them into each target page's l
 |---|---|---|---|---|---|
 | 1 | **Source** | seed pages + keywords → candidate videos | IG Business Discovery, YouTube API, vidIQ outlier search, manual links | `found` | 2 (manual links: done) |
 | 2 | **Filter** | candidates → ranked shortlist | velocity (views/hour), viral ratio, GTA VI relevance, used-source registry | `found` / `discarded` | 2 (registry: done) |
-| 3 | **Download** | URL → `source.mp4`, audio, metadata, perceptual hash | yt-dlp, ffmpeg | `downloaded` | 3 |
-| 4 | **Transcribe** | audio → timestamped transcript + language, on-screen text flag | faster-whisper, OCR sampling | `transcribed` | 3 |
+| 3 | **Download** | URL → `source.mp4`, audio, metadata, perceptual hash | yt-dlp, ffmpeg | `downloaded` | 3 (done) |
+| 4 | **Transcribe** | audio → timestamped transcript + language, on-screen text flag | faster-whisper, OCR sampling | `transcribed` | 3 (done) |
 | 5 | **Assign page** | job → target page(s) | page profiles | (page set) | done |
 | 6 | **Translate** | transcript → timing-fit translated segments + localized caption/hashtags | LLM + GTA VI glossary (Lucia, Jason, Vice City, Leonida stay untranslated) | `translated` | 4 |
 | 7 | **Voice** | translation → burned subtitles or dubbed track | ASS subtitles / TTS | `voiced` | 4 |
@@ -28,7 +28,7 @@ Find international GTA VI reels/shorts, translate them into each target page's l
 ### Storage layout
 
 ```
-data/sources/{platform}_{id}/source.mp4, audio.wav, frame.jpg, transcript.json, meta.json
+data/sources/{platform}_{id}/source.mp4, audio.wav, frame.jpg, transcript.json, meta.json (yt-dlp info)
 data/jobs/{job_id}/translation.json, subs.ass, dub.wav, final.mp4, manifest.json
 ```
 

@@ -139,8 +139,24 @@ def _v1_localization_pipeline(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_source_videos_phash ON source_videos(phash) WHERE phash IS NOT NULL")
 
 
+def _v2_worker_and_media(conn: sqlite3.Connection) -> None:
+    """Worker claim/lock + attempt counter on jobs, on-screen text flag on sources."""
+    if not _column_exists(conn, "jobs", "attempts"):
+        conn.execute("ALTER TABLE jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+
+    if not _column_exists(conn, "jobs", "locked_by"):
+        conn.execute("ALTER TABLE jobs ADD COLUMN locked_by TEXT")
+
+    if not _column_exists(conn, "jobs", "locked_at"):
+        conn.execute("ALTER TABLE jobs ADD COLUMN locked_at TIMESTAMP")
+
+    if not _column_exists(conn, "source_videos", "has_onscreen_text"):
+        conn.execute("ALTER TABLE source_videos ADD COLUMN has_onscreen_text INTEGER")
+
+
 MIGRATIONS: List[Tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (1, _v1_localization_pipeline),
+    (2, _v2_worker_and_media),
 ]
 
 

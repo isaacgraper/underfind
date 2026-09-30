@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 from underfind.backend.core.constants import (
     DATABASE_PATH,
     DEFAULT_LOCALIZATION_MODE,
+    JOB_LOCK_STALE_MINUTES,
     PHASH_MAX_DISTANCE,
 )
 from underfind.backend.core.errors import InvalidTransitionError, NotFoundError
@@ -31,7 +32,7 @@ from underfind.backend.schemas.pipeline import (
 _SOURCE_FIELDS = [
     "platform", "source_id", "url", "title", "caption", "author_handle", "author_name",
     "thumbnail_url", "views", "likes", "comments_count", "followers", "duration_seconds",
-    "published_at", "language", "phash",
+    "published_at", "language", "phash", "has_onscreen_text",
 ]
 
 
@@ -167,18 +168,17 @@ class PipelineRepository:
             )
             conn.commit()
 
-    def find_similar_source(
+    def find_similar_sources(
         self,
         phash: str,
         max_distance: int = PHASH_MAX_DISTANCE,
         exclude_key: Optional[str] = None,
-    ) -> Optional[SourceVideo]:
-        """Finds the closest known source whose perceptual hash is within max_distance bits (cross-platform reuploads)."""
+    ) -> List[tuple[SourceVideo, int]]:
+        """Known sources whose perceptual hash is within max_distance bits, closest first (cross-platform reuploads)."""
         with self._get_connection() as conn:
             rows = conn.execute("SELECT * FROM source_videos WHERE phash IS NOT NULL").fetchall()
 
-        best: Optional[sqlite3.Row] = None
-        best_distance = max_distance + 1
+        matches: List[tuple[SourceVideo, int]] = []
 
         for row in rows:
             if row["source_key"] == exclude_key or len(row["phash"]) != len(phash):
@@ -186,10 +186,19 @@ class PipelineRepository:
 
             distance = hamming_distance_hex(phash, row["phash"])
 
-            if distance < best_distance:
-                best, best_distance = row, distance
+            if distance <= max_distance:
+                matches.append((self._row_to_source(row), distance))
 
-        return self._row_to_source(best) if best else None
+        return sorted(matches, key=lambda m: m[1])
+
+    def find_similar_source(
+        self,
+        phash: str,
+        max_distance: int = PHASH_MAX_DISTANCE,
+        exclude_key: Optional[str] = None,
+    ) -> Optional[SourceVideo]:
+        matches = self.find_similar_sources(phash, max_distance, exclude_key)
+        return matches[0][0] if matches else None
 
     def get_source_job_id(
         self,
@@ -200,6 +209,19 @@ class PipelineRepository:
             row = conn.execute(
                 "SELECT id FROM jobs WHERE source_key = ? ORDER BY created_at LIMIT 1",
                 (source_key,)
+            ).fetchone()
+
+        return row["id"] if row else None
+
+    def get_active_source_job_id(
+        self,
+        source_key: str,
+    ) -> Optional[str]:
+        """Returns the first non-discarded job of a source."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT id FROM jobs WHERE source_key = ? AND status != ? ORDER BY created_at LIMIT 1",
+                (source_key, JobStatus.DISCARDED.value)
             ).fetchone()
 
         return row["id"] if row else None
@@ -228,6 +250,8 @@ class PipelineRepository:
             mode=row["mode"],
             artifacts=json.loads(row["artifacts_json"]) if row["artifacts_json"] else {},
             notes=row["notes"],
+            attempts=row["attempts"] or 0,
+            locked_by=row["locked_by"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             source=source,
@@ -338,9 +362,14 @@ class PipelineRepository:
         now = _now()
 
         with self._get_connection() as conn:
+            # Attempts are kept on failure (how hard the worker tried) and reset when the job moves on or is retried.
             conn.execute(
-                "UPDATE jobs SET status = ?, failed_from = ?, error = ?, updated_at = ? WHERE id = ?",
-                (target.value, failed_from, stored_error, now, job_id)
+                """
+                UPDATE jobs SET status = ?, failed_from = ?, error = ?, updated_at = ?,
+                    attempts = CASE WHEN ? = 'failed' THEN attempts ELSE 0 END
+                WHERE id = ?
+                """,
+                (target.value, failed_from, stored_error, now, target.value, job_id)
             )
             conn.execute(
                 "INSERT INTO job_events (job_id, from_status, to_status, note, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -350,6 +379,77 @@ class PipelineRepository:
 
         logger.debug("Job %s: %s -> %s", job_id, job.status.value, target.value)
         return self.get_job(job_id)
+
+    def claim_job(
+        self,
+        job_id: str,
+        worker_id: str,
+        stale_minutes: int = JOB_LOCK_STALE_MINUTES,
+    ) -> bool:
+        """Atomically locks a job for one worker. Locks older than stale_minutes (crashed worker) can be taken over."""
+        now = datetime.now(timezone.utc)
+        stale_before = (now - timedelta(minutes=stale_minutes)).isoformat()
+
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE jobs SET locked_by = ?, locked_at = ?
+                WHERE id = ? AND (locked_by IS NULL OR locked_by = ? OR locked_at < ?)
+                """,
+                (worker_id, now.isoformat(), job_id, worker_id, stale_before)
+            )
+            conn.commit()
+
+        return cursor.rowcount > 0
+
+    def release_job(
+        self,
+        job_id: str,
+        worker_id: str,
+    ) -> None:
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE jobs SET locked_by = NULL, locked_at = NULL WHERE id = ? AND locked_by = ?",
+                (job_id, worker_id)
+            )
+            conn.commit()
+
+    def record_attempt(
+        self,
+        job_id: str,
+    ) -> int:
+        with self._get_connection() as conn:
+            conn.execute("UPDATE jobs SET attempts = attempts + 1 WHERE id = ?", (job_id,))
+            conn.commit()
+            row = conn.execute("SELECT attempts FROM jobs WHERE id = ?", (job_id,)).fetchone()
+
+        return row["attempts"]
+
+    def list_runnable_job_ids(
+        self,
+        statuses: List[JobStatus],
+        limit: int = 50,
+        stale_minutes: int = JOB_LOCK_STALE_MINUTES,
+    ) -> List[str]:
+        """Unlocked (or stale-locked) jobs in the given statuses, oldest first."""
+        if not statuses:
+            return []
+
+        stale_before = (datetime.now(timezone.utc) - timedelta(minutes=stale_minutes)).isoformat()
+
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT id FROM jobs
+                WHERE status IN ({", ".join("?" for _ in statuses)})
+                  AND (locked_by IS NULL OR locked_at < ?)
+                ORDER BY updated_at
+                LIMIT ?
+                """,
+                (*[s.value for s in statuses], stale_before, limit)
+            ).fetchall()
+
+        return [r["id"] for r in rows]
 
     def assign_page(
         self,

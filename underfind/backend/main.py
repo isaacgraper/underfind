@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,7 +29,33 @@ from underfind.backend.core.errors import (
 from underfind.backend.core.logger import logger
 from underfind.backend.routers import api_router
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Starts the pipeline worker in-process when PIPELINE_WORKER_ENABLED=true."""
+    stop_event = threading.Event()
+    worker: threading.Thread | None = None
+
+    if os.environ.get("PIPELINE_WORKER_ENABLED", "").lower() in ("1", "true", "yes"):
+        from underfind.backend.pipeline.runner import get_default_runner
+
+        worker = threading.Thread(
+            target=get_default_runner().run_forever,
+            args=(stop_event,),
+            name="pipeline-worker",
+            daemon=True,
+        )
+        worker.start()
+
+    yield
+
+    stop_event.set()
+
+    if worker is not None:
+        worker.join(timeout=10)
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title="Underfind Content Intelligence Engine",
     description="Automated discovery of viral YouTube Shorts outliers, hook dissection (0-3s), and AI creative modeling.",
     version=SERVICE_VERSION,

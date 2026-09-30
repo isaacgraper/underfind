@@ -26,3 +26,8 @@ def get_pipeline_repo() -> PipelineRepository:
 
 def get_youtube_quota() -> QuotaTracker:
     return youtube_quota
+
+
+def get_pipeline_runner():
+    from underfind.backend.pipeline.runner import get_default_runner
+    return get_default_runner()

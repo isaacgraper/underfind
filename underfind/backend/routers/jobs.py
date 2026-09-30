@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import List, Optional, Dict
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 
+from underfind.backend.core.errors import NotFoundError
 from underfind.backend.core.logger import logger
 from underfind.backend.db.pipeline_repo import PipelineRepository
-from underfind.backend.dependencies import get_pipeline_repo
+from underfind.backend.dependencies import get_pipeline_repo, get_pipeline_runner
 from underfind.backend.schemas.pipeline import (
     AssignPageRequest,
     CreateJobFromUrlRequest,
     Job,
     JobEvent,
     JobStatus,
+    RunJobRequest,
+    Transcript,
     UpdateJobStatusRequest,
 )
 from underfind.backend.schemas.video import VideoItem
@@ -97,3 +101,44 @@ def assign_job_page(
     repo: PipelineRepository = Depends(get_pipeline_repo),
 ) -> Job:
     return repo.assign_page(job_id, req.page_id)
+
+
+@router.post("/jobs/{job_id}/run", status_code=202)
+def run_job(
+    job_id: str,
+    background: BackgroundTasks,
+    req: Optional[RunJobRequest] = None,
+    repo: PipelineRepository = Depends(get_pipeline_repo),
+    runner=Depends(get_pipeline_runner),
+) -> dict:
+    """Runs the job's automated stages (download, transcribe, ...) in the background."""
+    job = repo.get_job(job_id)
+    until_blocked = req.until_blocked if req else True
+    background.add_task(runner.run_until_blocked if until_blocked else runner.run_next, job_id)
+    logger.debug("API POST /api/jobs/%s/run scheduled from status '%s'", job_id, job.status.value)
+    return {"status": "scheduled", "job_id": job_id, "from_status": job.status.value}
+
+
+@router.post("/pipeline/tick", status_code=202)
+def pipeline_tick(
+    background: BackgroundTasks,
+    limit: int = Query(20, ge=1, le=200),
+    runner=Depends(get_pipeline_runner),
+) -> dict:
+    """Processes every runnable job once in the background (what the worker does on each poll)."""
+    background.add_task(runner.tick, limit)
+    return {"status": "scheduled", "limit": limit}
+
+
+@router.get("/jobs/{job_id}/transcript", response_model=Transcript)
+def get_job_transcript(
+    job_id: str,
+    repo: PipelineRepository = Depends(get_pipeline_repo),
+) -> Transcript:
+    job = repo.get_job(job_id)
+    path = job.artifacts.get("transcript")
+
+    if not path or not Path(path).exists():
+        raise NotFoundError(f"Job '{job_id}' has no transcript yet (status '{job.status.value}').")
+
+    return Transcript.model_validate_json(Path(path).read_text(encoding="utf-8"))

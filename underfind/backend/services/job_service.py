@@ -81,11 +81,11 @@ class JobService:
                 raise SourceAlreadyUsedError(source.key, existing_job_id=existing)
 
             if source.phash:
-                similar = self.repo.find_similar_source(source.phash, exclude_key=source.key)
-                similar_job = self.repo.get_source_job_id(similar.key) if similar else None
+                for similar, _distance in self.repo.find_similar_sources(source.phash, exclude_key=source.key):
+                    similar_job = self.repo.get_source_job_id(similar.key)
 
-                if similar_job:
-                    raise SourceAlreadyUsedError(source.key, existing_job_id=similar_job, duplicate_of=similar.key)
+                    if similar_job:
+                        raise SourceAlreadyUsedError(source.key, existing_job_id=similar_job, duplicate_of=similar.key)
 
         stored = self.repo.upsert_source(source)
         return self.repo.create_job(stored.key, page_id=page_id, mode=mode)

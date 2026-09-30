@@ -31,6 +31,8 @@ Plataforma de inteligência de conteúdo para garimpar vídeos e Shorts virais, 
 
 ## Pipeline de Localização (v2.2, em construção)
 
+Fluxo completo e automação: [`docs/WORKFLOW.md`](docs/WORKFLOW.md).
+
 Objetivo: pegar Reels/Shorts/TikToks internacionais (nicho inicial: GTA VI), traduzir para o idioma de cada página e renderizar no formato "foto de perfil + nome no topo, vídeo abaixo", entregando o arquivo final para a ferramenta de publicação em lote.
 
 Cada vídeo de origem vira um **job** com máquina de estados persistida em SQLite:
@@ -55,8 +57,23 @@ found -> downloaded -> transcribed -> translated -> voiced -> rendered -> export
 | `GET/POST/PUT/DELETE /api/pages` | Perfis de página (identidade + idioma) |
 | `GET/POST/PUT /api/templates` | Templates de renderização (cabeçalho, fontes, legenda) |
 | `GET /api/quota` | Uso de cota do dia |
+| `POST /api/jobs/{id}/run` | Executa as etapas automáticas do job em segundo plano |
+| `POST /api/pipeline/tick` | Processa todos os jobs prontos uma vez |
+| `GET /api/jobs/{id}/transcript` | Transcrição com timestamps, idioma e texto na tela |
 
-Próximas fases: download (yt-dlp) + transcrição (Whisper), renderização do template (ffmpeg), exportação com manifest, tradução/dublagem e busca automatizada multi-plataforma.
+**Etapas automáticas (worker):**
+- `found -> downloaded`: yt-dlp baixa o vídeo uma vez por origem (`data/sources/{plataforma}_{id}/source.mp4`), atualiza metadados (título, legenda, autor, views, likes, duração), calcula o hash perceptual e descarta o job se for reupload de uma origem já usada em outra plataforma.
+- `downloaded -> transcribed`: faster-whisper gera `transcript.json` (segmentos + palavras com timestamps, idioma detectado); OCR opcional (`poetry install -E ocr`) marca vídeos com texto gravado na tela.
+- Erros temporários: 3 tentativas com backoff exponencial. Erros permanentes (privado, removido, login exigido): falha imediata. Jobs `failed` voltam para a etapa que falhou via `PATCH /status`.
+
+```bash
+python app.py worker              # worker contínuo (ou PIPELINE_WORKER_ENABLED=true no servidor)
+python app.py run <JOB_ID>        # avança um job até a próxima etapa manual
+```
+
+Requer ffmpeg no PATH (o pacote `imageio-ffmpeg` fornece um binário como fallback). Instagram e TikTok costumam exigir cookies de login: `YTDLP_COOKIES_FILE`.
+
+Próximas fases: renderização do template (ffmpeg), exportação com manifest, tradução/dublagem e busca automatizada multi-plataforma.
 
 ---
 

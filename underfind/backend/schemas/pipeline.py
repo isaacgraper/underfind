@@ -59,6 +59,7 @@ class SourceVideo(BaseModel):
     published_at: Optional[str] = None
     language: Optional[str] = None
     phash: Optional[str] = Field(default=None, description="64-bit perceptual hash (hex) of a reference frame")
+    has_onscreen_text: Optional[bool] = None
 
     @property
     def key(self) -> str:
@@ -109,6 +110,8 @@ class Job(BaseModel):
     mode: str = DEFAULT_LOCALIZATION_MODE
     artifacts: Dict[str, str] = Field(default_factory=dict)
     notes: Optional[str] = None
+    attempts: int = 0
+    locked_by: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     source: Optional[SourceVideo] = None
@@ -146,3 +149,47 @@ class QuotaStatus(BaseModel):
     limit: int
     remaining: int
     exhausted: bool
+
+
+class TranscriptWord(BaseModel):
+    start: float
+    end: float
+    word: str
+    probability: Optional[float] = None
+
+
+class TranscriptSegment(BaseModel):
+    start: float
+    end: float
+    text: str
+    words: List[TranscriptWord] = Field(default_factory=list)
+
+
+class OnScreenText(BaseModel):
+    at_seconds: float
+    text: str
+    confidence: float
+
+
+class Transcript(BaseModel):
+    language: Optional[str] = None
+    language_probability: Optional[float] = None
+    duration_seconds: Optional[float] = None
+    model: Optional[str] = None
+    segments: List[TranscriptSegment] = Field(default_factory=list)
+    onscreen_text: Optional[List[OnScreenText]] = Field(
+        default=None,
+        description="Burned-in text found by OCR sampling; None when OCR is not installed",
+    )
+
+    @property
+    def text(self) -> str:
+        return " ".join(s.text.strip() for s in self.segments).strip()
+
+    @property
+    def has_speech(self) -> bool:
+        return any(s.text.strip() for s in self.segments)
+
+
+class RunJobRequest(BaseModel):
+    until_blocked: bool = Field(default=True, description="Keep advancing until a stage without a handler or a review gate")
