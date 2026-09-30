@@ -1,11 +1,12 @@
 # Underfind: design decisions
 
-How the interface for the post-modeling pipeline (Phase 8) was designed, and why. Four design skills from skills.sh were applied in the order requested, each one working from the previous one's output:
+How the interface for the post-modeling pipeline (Phase 8) was designed, and why. Five design skills from skills.sh were applied in the order requested, each one working from the previous one's output:
 
 1. **ui-ux-pro-max** (nextlevelbuilder): research and evidence. Design-system search, UX rules, typography, stack guidance.
 2. **frontend-design** (Anthropic): turns the evidence into a point of view, then reviews the plan against generic defaults.
 3. **polish** (impeccable): audits the existing frontend and fixes the acceptance bar.
 4. **bolder** (impeccable): one scoped amplification, only where the first three left something flat.
+5. **emil-design-eng** (Emil Kowalski): the interaction and motion layer. Decides what animates at all, how, and audits the existing CSS in its Before / After / Why format.
 
 This file replaces the v2.1 design doc (YouTube discovery dashboard). Its token set and Emil Kowalski motion rules carry over where noted in section 7; everything else was decided again for the pipeline product.
 
@@ -219,12 +220,11 @@ Errors name the problem and the recovery: "Não foi possível baixar: o Instagra
 
 ## 6. Interaction and motion
 
-- **Dial**: motion 3 of 10. Subtle. Nothing moves that does not answer an action, except one moment.
-- **The one authored moment**: a card entering "Precisa de você" settles into its lane (translate and fade, 240 ms, exponential ease-out from an already-visible state). It is the only unprompted motion in the product, because it is the only event that needs the user's attention.
-- **Answers to action** (kept from v2.1 because they were right): `cubic-bezier(0.23, 1, 0.32, 1)` ease-out, `:active { transform: scale(0.97) }`, exits faster than entrances, origin-aware menus. Animate transform and opacity only.
-- **Live state** (from the operations pattern): pipeline data refreshes by polling every 3 s while the tab is visible; the top bar shows "atualizado há Ns" and a stale warning after 30 s; a pause control stops updates. Status is text plus icon, never color alone.
-- **Reduced motion**: all of the above collapses to instant state changes.
-- **No scroll reveals, no entrance animation on every section, no hover lift on every card.**
+Motion dial: **3 of 10, subtle**, matching ui-ux-pro-max's operations pattern and emil-design-eng's rule that "a professional dashboard should be crisp and fast". What animates, how long and with which curve is decided in section 9, because that is where the frequency framework is applied to every interaction in this product. Three rules hold everywhere:
+
+- Nothing animates that does not answer an action, except one moment: a post arriving in "Precisa de você".
+- Animate `transform` and `opacity` only. Status uses text and icon, never color alone.
+- Pipeline data refreshes by polling every 3 s while the tab is visible (paused when hidden); the top bar shows "atualizado há Ns", warns when stale after 30 s, and offers a pause control.
 
 ---
 
@@ -282,13 +282,25 @@ Carried over from v2.1: spacing rhythm, easing curves, the fluid-pill idea for s
   --radius-panel: 14px;
   --radius-pill: 9999px;
 
-  /* Motion */
-  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
-  --dur-fast: 120ms; --dur-base: 200ms; --dur-settle: 240ms;
+  /* Motion (curves from emil-design-eng; built-in CSS easings are too weak) */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);       /* entrances, exits, anything the user triggers */
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);   /* things moving on screen */
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);    /* side panels */
+  --dur-press: 120ms;     /* buttons: 100-160 */
+  --dur-hover: 100ms;     /* color changes on hover */
+  --dur-pop: 180ms;       /* menus, popovers, tooltips: 125-250 */
+  --dur-modal: 220ms;     /* dialogs: 200-300 */
+  --dur-settle: 240ms;    /* the one authored moment */
+  --dur-exit: 160ms;      /* exits are faster than entrances */
+  --enter-y: 8px;         /* travel for entrances */
+  --enter-scale: 0.95;    /* never from 0 */
+  --press-scale: 0.97;
 }
 
 @media (pointer: coarse) { :root { --control-h: 44px; } }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }
+
+/* Reduced motion means gentler, not none: drop travel and scale, keep opacity and color transitions. */
+@media (prefers-reduced-motion: reduce) { :root { --enter-y: 0px; --enter-scale: 1; } }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 ::selection { background: var(--accent-wash); color: var(--text-primary); }
 ```
@@ -329,12 +341,82 @@ Handoff back to polish: the Review screen goes through the section 4.2 bar like 
 
 ---
 
-## 9. Implementation notes for Phase 8
+## 9. Pass five: emil-design-eng
+
+emil-design-eng asks four questions before any animation code, in order: should it animate at all, what is the purpose, which easing, how fast. The answers below are for this product's real interactions. Its required review format (Before / After / Why) is used for the audit of the current CSS and for corrections to this document's own earlier draft.
+
+### 9.1 Does it animate? (frequency decides)
+
+| Interaction | How often | Decision |
+|---|---|---|
+| Inbox keyboard shortcuts (`j` `k` `x` `m` `d`), row selection, previous/next job in Review | Hundreds per session when clearing a batch | **No animation. Ever.** Selection and focus move instantly. |
+| Row and card hover | Tens per minute | Color change only, 100 ms, no lift, no scale. Gated behind `@media (hover: hover) and (pointer: fine)`. |
+| Button press | Constant | `:active { transform: scale(0.97) }`, 120 ms ease-out. Kept from v2.1. |
+| Tooltips on icon buttons and stage dots | Frequent | 125 ms scale-and-fade from the trigger; after one is open, neighbors open instantly with no animation. |
+| Menus and popovers (page picker, niche filter, row actions) | Occasional | Enter from `scale(0.95)` and `opacity: 0`, 180 ms ease-out, `transform-origin` at the trigger. |
+| Confirm dialogs | Rare | Center origin (modals are the exception), 220 ms ease-out, same scale-and-fade. |
+| Toast ("Descartado. Desfazer", "Exportado") | Occasional | Enters from `translateY(100%)` with `@starting-style`, exits the same direction, exit faster than enter; timer pauses when the tab is hidden and on hover (undo lasts 8 s). |
+| A post arriving in "Precisa de você" | A few per hour | **The one authored moment.** `translateY(8px)` and opacity to rest, 240 ms ease-out. A batch arriving together staggers 40 ms per card, capped at five, never blocking clicks. |
+| Approving a post | Tens per day | The card leaves its lane in 160 ms (exit faster than enter); the destination lane gets it without animation. |
+| "Aprovar e exportar" label (idle, exporting, exported) | Tens per day | Crossfade masked with `filter: blur(2px)` for 200 ms, per the blur technique, so two labels never read as two objects. |
+| Stage track and progress | Continuous | Constant motion uses linear; a stage completing changes color with ease-out. |
+| Delete a page or template | Very rare | **Hold to confirm**: a clip-path fill over 1.5 s linear while pressed, snaps back in 200 ms ease-out on release, plus the press scale. Slow where the user is deciding, fast where the system responds. |
+| Lane scroll, table sort, filter change | Constant | None. |
+| Drag and drop | Not used | The pipeline is a state machine; a card cannot be dragged to an arbitrary lane, so no drag interaction exists to tune. |
+| Springs | None needed | No gesture or decorative mouse-tracking element in this product. Reserved for a future swipe-to-dismiss on touch. |
+
+### 9.2 Rules adopted as tokens and lint
+
+- Curves: `--ease-out`, `--ease-in-out`, `--ease-drawer` from section 7. Never `ease-in` on UI. `ease-in-out` only for things moving on screen.
+- Durations: press 120, hover 100, pop 180, modal 220, settle 240, exit 160. Nothing over 300 ms.
+- Only `transform` and `opacity` animate (plus `filter` for the label blur and `clip-path` for hold-to-confirm and the tab trick). Never width, height, padding or margin.
+- Specify properties, never `transition: all`.
+- Entrances use CSS transitions with `@starting-style`, not keyframes, because jobs complete in bursts and a keyframe restarts from zero when interrupted.
+- Entrances start from `scale(0.95)` and `opacity: 0`, never `scale(0)`.
+- Hover states live behind the hover media query so touch taps do not trigger them.
+- The Inbox status filter (Novos, Enfileirados, Rejeitados, Ignorados) is a segmented control built with the duplicated-list, clipped-copy trick so the active color slides instead of cross-fading.
+- Reduced motion keeps opacity and color, drops travel and scale (through `--enter-y` and `--enter-scale`).
+
+### 9.3 Audit of the current frontend
+
+Counts are from `frontend/src` today.
+
+| Before | After | Why |
+|---|---|---|
+| 12 rules use `transition: all var(--transition-fast, 150ms cubic-bezier(...))` | `transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-hover) ease` with the properties each element actually changes | `all` animates properties nobody meant to animate and hides layout-triggering ones. |
+| `--transition-fast` is referenced but defined nowhere, so every use runs on its inline fallback | Tokens `--dur-*` and `--ease-*` defined once in `tokens.css` | A silent fallback means the timing cannot be tuned from one place. |
+| 27 `:hover` rules, 0 behind a hover media query | Wrap in `@media (hover: hover) and (pointer: fine)` | On touch, a tap triggers hover and it sticks. |
+| 0 `prefers-reduced-motion` blocks | Token-driven reduction (section 7): travel and scale off, opacity and color kept | Reduced motion means gentler, not frozen. |
+| Modal enters with a `modalEnter` keyframe | Transition with `@starting-style`, `scale(0.95)` to 1 and opacity, center origin, 220 ms | Keyframes restart from zero if interrupted; modals stay centered, popovers do not. |
+| Popovers and dropdowns have no `transform-origin` | `transform-origin: var(--transform-origin)` set from the trigger | A default center origin is wrong for anything anchored to a button. |
+| Same duration and curve on enter and exit | Exit 160 ms, enter 180 to 240 ms | The system responding should be faster than the system introducing. |
+| 19 `:active { transform: scale(0.9x) }` rules | **Kept** | Already correct. Normalize to `--press-scale`. |
+| Easing already `cubic-bezier(0.23, 1, 0.32, 1)` on 7 transitions | **Kept** | Already the strong ease-out; the work is to make the other 21 use it. |
+| No `scale(0)` and no `ease-in` anywhere | **Kept** | Already avoided; the lint rule keeps it that way. |
+
+### 9.4 Corrections to this document's own earlier draft
+
+| Before | After | Why |
+|---|---|---|
+| Section 7 collapsed every transition to 0.01 ms under `prefers-reduced-motion` | `--enter-y: 0` and `--enter-scale: 1` only | emil-design-eng: reduced motion removes movement but keeps the opacity and color changes that aid comprehension. |
+| Section 6 listed a single "settle" duration and one ease-out | Six named durations and three curves, each assigned by element type | One duration for every transition was already flagged by ui-ux-pro-max; durations are chosen by what the element is. |
+| Approve was a plain button that changed label | Blur-masked label crossfade | Two overlapping labels read as two objects; blur makes it one transformation. |
+| Delete page used a confirmation dialog | Hold-to-confirm | The action is rare and irreversible; a deliberate press is a better confirmation than a dialog that is dismissed on reflex. The dialog stays for bulk discards. |
+
+### 9.5 Review process
+
+- Review every animation at 2 to 5 times normal duration (DevTools animation inspector) and frame by frame for the coordinated ones (card arrival, label crossfade).
+- Look again the next day with fresh eyes.
+- Test touch behavior (hover gating, tap targets, toast dismissal) on a real device, not only a narrow window.
+
+---
+
+## 10. Implementation notes for Phase 8
 
 - **Fonts**: `@fontsource/fira-sans`, `@fontsource/fira-code`, `@fontsource/anton` imported in `main.tsx`; no network font requests.
 - **Structure**: keep the existing `components/`, `features/`, `pages/` layout; add `features/pipeline`, `features/inbox`, `features/review`, `features/pages`; tokens live only in `styles/tokens.css`.
 - **Data**: one polling hook per list with visibility pause; types mirror the API schemas.
 - **Icons**: one library, one stroke weight (Lucide, already the v2.1 choice). No emoji as icons.
 - **Testing hooks**: every action and lane carries a stable `data-testid`; end-to-end tests drive the real pages against a backend with stubbed downloaders, transcriber and translator, and assert on the rendered output files.
-- **Lint**: no `outline: none` without a `:focus-visible` replacement, no hex in component CSS, no `font-size` under 12 px.
+- **Lint**: no `outline: none` without a `:focus-visible` replacement, no hex in component CSS, no `font-size` under 12 px, no `transition: all`, no `scale(0)`, no `ease-in`, no `:hover` outside the hover media query.
 - **Open decisions** for the user: whether the UI stays pt-BR only or gets an English pack; whether Discover keeps its own top-level tab once the Inbox has a manual search box.

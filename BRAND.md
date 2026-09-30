@@ -182,7 +182,7 @@ Full reasoning in [DESIGN.md](DESIGN.md). The short version:
 - **One accent, one meaning.** Magenta `#E879F9` means "this needs you". Amber, cyan, green and red mean queued, working, exported, failed and nothing else.
 - **The brand gradient** (`#D946EF` to `#FB923C`) belongs to the artifact: the highlighted words in rendered headlines. In the interface it appears once, in the review workspace's headline field, because that field is a live preview of the artifact.
 - **Type:** Fira Sans for the interface and the wordmark, Fira Code only for real data (ids, scores, durations), Anton only in the review workspace's headline field. All self-hosted.
-- **Motion:** subtle. One authored moment (a post arriving in "Precisa de você"); everything else answers a click.
+- **Motion:** subtle and crisp (emil-design-eng rules). Keyboard actions never animate; hover is color only; one authored moment (a post arriving in "Precisa de você"); everything else answers a click in under 250 ms with a strong ease-out, and exits are faster than entrances.
 - **Local is visible.** The top bar always states the AI mode; there is no cloud iconography unless online mode is on.
 
 ### Logo direction
