@@ -31,6 +31,8 @@ Caption and hashtags:
 - The caption is the post text for the target page: a short hook line, one or two lines of context from the video, then a question or call to comment. Do not mention the source creator or that it is a translation.
 - 5 to 10 hashtags mixing target-language tags with global ones; always include #gta6.
 
+Headline: when given, it is the big text baked into the post image. Return it translated as one line of about the same length, punchy and in capitals like the original.
+
 On-screen text: translate each item so it can be overlaid on the video; keep it as short as the original."""
 
 
@@ -46,6 +48,7 @@ class _DraftOnScreen(BaseModel):
 
 class TranslationDraft(BaseModel):
     segments: List[_DraftSegment] = Field(default_factory=list)
+    headline: str = ""
     caption: str
     hashtags: List[str] = Field(default_factory=list)
     onscreen_text: List[_DraftOnScreen] = Field(default_factory=list)
@@ -71,6 +74,7 @@ class TranslationInput:
     mode: str
     segments: List[SegmentInput]
     source_caption: Optional[str] = None
+    headline: Optional[str] = None
     onscreen_text: List[str] = field(default_factory=list)
     glossary: List[str] = field(default_factory=list)
 
@@ -132,6 +136,7 @@ class LLMTranslator:
                 {"index": s.index, "start": s.start, "end": s.end, "max_chars": s.max_chars, "text": s.text}
                 for s in req.segments
             ],
+            "headline": req.headline or "",
             "original_caption": req.source_caption or "",
             "onscreen_text": req.onscreen_text,
         }

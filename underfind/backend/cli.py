@@ -241,6 +241,33 @@ def cmd_run(args: argparse.Namespace) -> None:
     console.print(f"Job [bold]{job.id}[/] -> [bold {style}]{job.status.value}[/]" + (f"  {job.error}" if job.error else ""))
 
 
+def cmd_add(args: argparse.Namespace) -> None:
+    """Opens a localization job from a post URL or from local files, optionally running it right away."""
+    from underfind.backend.core.errors import SourceAlreadyUsedError
+    from underfind.backend.db.pipeline_repo import pipeline_repo
+    from underfind.backend.services.job_service import JobService
+
+    service = JobService(pipeline_repo)
+    local_only = {"local": True, "online": False}.get(args.ai_mode)
+
+    try:
+        if len(args.inputs) == 1 and args.inputs[0].startswith(("http://", "https://")):
+            job = service.open_job_from_url(args.inputs[0], page_id=args.page, mode=args.mode, force=args.force, local_only=local_only)
+        else:
+            job = service.open_job_from_files(
+                args.inputs, source_url=args.source_url, caption=args.caption, author_handle=args.author,
+                page_id=args.page, mode=args.mode, force=args.force, local_only=local_only,
+            )
+    except (SourceAlreadyUsedError, ValueError) as err:
+        console.print(f"[bold #ef4444]{err}[/]")
+        sys.exit(1)
+
+    console.print(f"Job [bold]{job.id}[/] created for {job.source_key}")
+
+    if args.run:
+        cmd_run(argparse.Namespace(job_id=job.id, once=False))
+
+
 def cmd_models(args: argparse.Namespace) -> None:
     """Pre-downloads local translation models and Piper voices so the pipeline runs fully offline afterwards."""
     from underfind.backend.pipeline.dub import PiperTtsProvider
@@ -267,6 +294,7 @@ DISPATCH: Dict[str, Callable[[argparse.Namespace], None]] = {
     "worker": cmd_worker,
     "run": cmd_run,
     "models": cmd_models,
+    "add": cmd_add,
 }
 
 
@@ -311,6 +339,17 @@ def main():
     p_run.add_argument("--once", action="store_true", help="Run only the next stage")
     _add_ai_mode_flags(p_run)
 
+    p_add = subparsers.add_parser("add", help="Create a localization job from a post URL or local image/video files")
+    p_add.add_argument("inputs", nargs="+", help="One post URL, or one or more local files (a carousel in order)")
+    p_add.add_argument("--page", type=int, default=None, help="Target page ID")
+    p_add.add_argument("--mode", choices=["subtitles", "dub"], default="subtitles")
+    p_add.add_argument("--source-url", default=None, help="Original post URL of local files (credit and dedup)")
+    p_add.add_argument("--caption", default=None, help="Original caption of local files")
+    p_add.add_argument("--author", default=None, help="Original author handle of local files")
+    p_add.add_argument("--force", action="store_true", help="Create even if the source was already used")
+    p_add.add_argument("--run", action="store_true", help="Run the job right after creating it")
+    _add_ai_mode_flags(p_add)
+
     p_models = subparsers.add_parser("models", help="Download local translation models and Piper voices for offline use")
     p_models.add_argument("--translate", nargs="*", metavar="FROM:TO", help="Language pairs, e.g. en:pb es:en en:es")
     p_models.add_argument("--voice", nargs="*", metavar="NAME", help="Piper voices, e.g. pt_BR-faber-medium es_MX-ald-medium")
@@ -321,7 +360,7 @@ def main():
         parser.print_help()
         sys.exit(0)
 
-    if args.command in ("serve", "worker", "run"):
+    if args.command in ("serve", "worker", "run", "add"):
         _apply_ai_mode(args)
 
     if args.command in DISPATCH:

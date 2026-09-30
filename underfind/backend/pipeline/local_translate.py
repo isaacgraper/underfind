@@ -277,14 +277,16 @@ class LocalTranslator:
         caption_text = _MENTION.sub("", _HASHTAG.sub("", caption_source))
         caption_lines = [line.strip() for line in caption_text.splitlines() if line.strip()]
 
-        translated = self._translate_texts([*texts, *caption_lines, *req.onscreen_text], source, targets, req.glossary)
-        n_seg, n_cap = len(texts), len(caption_lines)
+        headline = [" ".join(req.headline.split())] if req.headline else []
+        translated = self._translate_texts([*texts, *caption_lines, *req.onscreen_text, *headline], source, targets, req.glossary)
+        n_seg, n_cap, n_on = len(texts), len(caption_lines), len(req.onscreen_text)
 
         return TranslationDraft.model_validate({
             "segments": [{"index": s.index, "text": t} for s, t in zip(req.segments, translated[:n_seg])],
             "caption": "\n".join(translated[n_seg:n_seg + n_cap]),
             "hashtags": source_tags,
-            "onscreen_text": [{"source": src, "text": t} for src, t in zip(req.onscreen_text, translated[n_seg + n_cap:])],
+            "onscreen_text": [{"source": src, "text": t} for src, t in zip(req.onscreen_text, translated[n_seg + n_cap:n_seg + n_cap + n_on])],
+            "headline": translated[n_seg + n_cap + n_on] if headline else "",
         })
 
     def shorten(self, target_language: str, segments: List[SegmentInput], glossary: List[str]) -> list:

@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+import re
+import subprocess
+import sys
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from underfind.backend.core.constants import YTDLP_FORMAT
 from underfind.backend.core.errors import PermanentStageError
@@ -28,10 +31,32 @@ _PERMANENT_MARKERS = (
 )
 
 
+# yt-dlp messages for posts that exist but hold images, not video: handed to gallery-dl instead of failing.
+_NO_VIDEO_MARKERS = (
+    "no video formats found",
+    "there is no video in this post",
+    "no video in this post",
+    "this post does not contain a video",
+    "unsupported url: https://www.tiktok.com/@",
+)
+
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".heic"}
+VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
+
+
+class NoVideoInPost(RuntimeError):
+    """The post has no video (photo post or image carousel); try an image downloader."""
+
+
 @dataclass
 class DownloadResult:
-    video_path: Path
+    video_path: Optional[Path]
     info: Dict[str, Any]
+    files: List[Path] = field(default_factory=list)
+
+    @property
+    def media_files(self) -> List[Path]:
+        return self.files or ([self.video_path] if self.video_path else [])
 
 
 def source_updates_from_info(info: Dict[str, Any]) -> Dict[str, Any]:
@@ -128,6 +153,9 @@ class YtDlpDownloader:
         except DownloadError as err:
             message = str(err)
 
+            if any(marker in message.lower() for marker in _NO_VIDEO_MARKERS):
+                raise NoVideoInPost(message) from err
+
             if any(marker in message.lower() for marker in _PERMANENT_MARKERS):
                 hint = "" if (self.cookies_file or self.cookies_from_browser) else " Configure YTDLP_COOKIES_FILE if the platform requires login."
                 raise PermanentStageError(f"Download failed: {message}{hint}") from err
@@ -146,3 +174,101 @@ class YtDlpDownloader:
 
         (dest_dir / "meta.json").write_text(json.dumps(info, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
         return DownloadResult(video_path=video_path, info=info)
+
+
+def _gallery_info(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """gallery-dl post metadata (Instagram/TikTok/...) mapped to the yt-dlp keys source_updates_from_info reads."""
+    author = metadata.get("author") if isinstance(metadata.get("author"), dict) else {}
+    info: Dict[str, Any] = {
+        "description": metadata.get("description") or metadata.get("content") or metadata.get("desc"),
+        "uploader_id": metadata.get("username") or author.get("uniqueId"),
+        "uploader": metadata.get("fullname") or metadata.get("nickname") or author.get("nickname"),
+        "like_count": metadata.get("likes") or metadata.get("digg_count"),
+        "comment_count": metadata.get("comments") or metadata.get("comment_count"),
+    }
+    date = metadata.get("post_date") or metadata.get("date")
+
+    if isinstance(date, str) and re.match(r"\d{4}-\d{2}-\d{2}", date):
+        info["timestamp"] = datetime.fromisoformat(date.replace(" ", "T")).replace(tzinfo=timezone.utc).timestamp()
+
+    return {k: v for k, v in info.items() if v is not None}
+
+
+class GalleryDlDownloader:
+    """
+    Photo posts and carousels (images and videos) with gallery-dl, saved as media_00.jpg, media_01.mp4, ...
+    Reuses YTDLP_COOKIES_FILE and YTDLP_PROXY; Instagram usually needs the cookies.
+    """
+
+    def __init__(
+        self,
+        cookies_file: Optional[str] = None,
+        proxy: Optional[str] = None,
+        run=subprocess.run,
+    ):
+        self.cookies_file = cookies_file or os.environ.get("YTDLP_COOKIES_FILE") or None
+        self.proxy = proxy or os.environ.get("YTDLP_PROXY") or None
+        self._run = run
+
+    def download(self, url: str, dest_dir: Path) -> DownloadResult:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            sys.executable, "-m", "gallery_dl",
+            "-D", str(dest_dir),
+            "-f", "media_{num:>02}.{extension}",
+            "--write-metadata",
+        ]
+
+        if self.cookies_file:
+            cmd += ["-C", self.cookies_file]
+
+        if self.proxy:
+            cmd += ["--proxy", self.proxy]
+
+        logger.info("Downloading post media with gallery-dl: %s", url)
+        result = self._run([*cmd, url], capture_output=True, text=True, timeout=600)
+        files = sorted(
+            p for p in dest_dir.glob("media_*")
+            if p.suffix.lower() in IMAGE_SUFFIXES | VIDEO_SUFFIXES
+        )
+
+        if result.returncode != 0 or not files:
+            message = (result.stderr or result.stdout or "").strip()[-500:] or "no media downloaded"
+
+            if any(marker in message.lower() for marker in _PERMANENT_MARKERS) or not files:
+                hint = "" if self.cookies_file else " Configure YTDLP_COOKIES_FILE if the platform requires login."
+                raise PermanentStageError(f"Post download failed: {message}{hint}")
+
+            raise RuntimeError(f"gallery-dl failed: {message}")
+
+        metadata_files = sorted(dest_dir.glob("media_*.json"))
+        metadata = json.loads(metadata_files[0].read_text(encoding="utf-8")) if metadata_files else {}
+        info = _gallery_info(metadata)
+        (dest_dir / "meta.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        return DownloadResult(video_path=None, info=info, files=files)
+
+
+# Post URLs that are usually photos or carousels go to gallery-dl first.
+_GALLERY_FIRST = re.compile(r"instagram\.com/(?:[A-Za-z0-9_.]+/)?p/|tiktok\.com/@[^/]+/photo/")
+
+
+class MediaDownloader:
+    """yt-dlp for videos; gallery-dl for photo posts and carousels, and whenever yt-dlp finds no video."""
+
+    def __init__(
+        self,
+        video: Optional[YtDlpDownloader] = None,
+        gallery: Optional[GalleryDlDownloader] = None,
+    ):
+        self.video = video or YtDlpDownloader()
+        self.gallery = gallery or GalleryDlDownloader()
+
+    def download(self, url: str, dest_dir: Path) -> DownloadResult:
+        if _GALLERY_FIRST.search(url):
+            return self.gallery.download(url, dest_dir)
+
+        try:
+            return self.video.download(url, dest_dir)
+        except NoVideoInPost:
+            logger.info("No video in %s; downloading its images", url)
+            return self.gallery.download(url, dest_dir)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,7 +14,8 @@ from underfind.backend.core.constants import AI_MODES, DEFAULT_AI_MODE, BUDGET_T
 from underfind.backend.core.errors import DuplicateSourceError, PermanentStageError
 from underfind.backend.core.logger import logger
 from underfind.backend.db.pipeline_repo import PipelineRepository
-from underfind.backend.pipeline.download import YtDlpDownloader, source_updates_from_info
+from underfind.backend.pipeline.download import VIDEO_SUFFIXES, MediaDownloader, source_updates_from_info
+from underfind.backend.pipeline.headline import auto_highlight, detect_headline
 from underfind.backend.pipeline.dub import PiperTtsProvider, TtsProvider, build_tts, default_voice, mix_dub, synthesize_segments
 from underfind.backend.core.niches import load_niche
 from underfind.backend.pipeline.glossary import load_glossary
@@ -24,7 +26,10 @@ from underfind.backend.pipeline.subtitles import build_cues, write_ass, write_sr
 from underfind.backend.pipeline.transcribe import WhisperTranscriber
 from underfind.backend.pipeline.translate import LLMTranslator, SegmentInput, TranslationDraft, TranslationInput, segment_budget
 from underfind.backend.schemas.pipeline import (
+    Headline,
     Job,
+    MediaType,
+    Platform,
     PageProfile,
     RenderTemplate,
     Transcript,
@@ -81,7 +86,7 @@ class Workspace:
 class StageContext:
     repo: PipelineRepository
     workspace: Workspace = field(default_factory=Workspace)
-    downloader: YtDlpDownloader = field(default_factory=YtDlpDownloader)
+    downloader: Any = field(default_factory=MediaDownloader)
     transcriber: WhisperTranscriber = field(default_factory=WhisperTranscriber)
     ocr: Optional[OnScreenTextDetector] = field(default_factory=OnScreenTextDetector)
     # Explicit backends (tests, custom setups) win; otherwise one is built per local/online choice and cached.
@@ -121,31 +126,109 @@ def _require_source(job: Job) -> None:
         raise PermanentStageError(f"Job {job.id} has no source video record.")
 
 
+def load_media(src_dir: Path) -> Optional[tuple[MediaType, List[Path]]]:
+    """The downloaded media manifest (media.json), or None when the source hasn't been downloaded yet."""
+    manifest = src_dir / "media.json"
+
+    if not manifest.exists():
+        # Sources downloaded before image support only have source.mp4.
+        legacy = src_dir / "source.mp4"
+        return (MediaType.VIDEO, [legacy]) if legacy.exists() else None
+
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    return MediaType(data["media_type"]), [src_dir / name for name in data["files"]]
+
+
+def _save_media(src_dir: Path, files: List[Path]) -> tuple[MediaType, List[Path]]:
+    """Normalizes downloaded files: a lone video becomes source.mp4; writes media.json."""
+    files = [f for f in files if f.exists()]
+
+    if not files:
+        raise PermanentStageError(f"No media files in {src_dir}")
+
+    if len(files) == 1 and files[0].suffix.lower() in VIDEO_SUFFIXES:
+        target = src_dir / "source.mp4"
+
+        if files[0] != target:
+            files[0].replace(target)
+
+        files = [target]
+        media_type = MediaType.VIDEO
+    elif len(files) == 1:
+        media_type = MediaType.IMAGE
+    else:
+        media_type = MediaType.CAROUSEL
+
+    (src_dir / "media.json").write_text(
+        json.dumps({"media_type": media_type.value, "files": [f.name for f in files]}, indent=2),
+        encoding="utf-8",
+    )
+    return media_type, files
+
+
+def _copy_local_files(source_files: List[str], src_dir: Path) -> List[Path]:
+    src_dir.mkdir(parents=True, exist_ok=True)
+    copied: List[Path] = []
+
+    for i, original in enumerate(source_files):
+        path = Path(original).expanduser()
+
+        if not path.exists():
+            raise PermanentStageError(f"Local media file not found: {path}")
+
+        target = src_dir / f"media_{i:02d}{path.suffix.lower()}"
+        shutil.copyfile(path, target)
+        copied.append(target)
+
+    return copied
+
+
+def _is_video(path: Path) -> bool:
+    return path.suffix.lower() in VIDEO_SUFFIXES
+
+
 def download_stage(
     job: Job,
     ctx: StageContext,
 ) -> None:
     """
-    found -> downloaded: fetch the video once per source, refresh metadata, hash a reference frame,
-    and stop if it's a reupload of a source another active job already uses.
+    found -> downloaded: fetch the post's media once per source (video, image or carousel; local files are copied),
+    refresh metadata, hash the first frame/image, and stop if it's a reupload of a source another active job uses.
     """
     _require_source(job)
     src_dir = ctx.workspace.source_dir(job.source_key)
-    video_path = src_dir / "source.mp4"
+    media = load_media(src_dir)
 
-    if video_path.exists():
-        logger.debug("Source %s already downloaded; reusing %s", job.source_key, video_path)
+    if media:
+        logger.debug("Source %s already downloaded; reusing %s", job.source_key, src_dir)
+        media_type, files = media
     else:
-        result = ctx.downloader.download(job.source.url, src_dir)
-        updates = source_updates_from_info(result.info)
+        if job.source.platform == Platform.LOCAL:
+            files = _copy_local_files(job.source.media_files, src_dir)
+            info = {}
+        else:
+            result = ctx.downloader.download(job.source.url, src_dir)
+            files, info = result.media_files, result.info
+
+        media_type, files = _save_media(src_dir, files)
+        updates = source_updates_from_info(info)
+        updates.update(media_type=media_type, media_files=[f.name for f in files])
         ctx.repo.upsert_source(job.source.model_copy(update=updates))
 
-    duration = probe_duration(video_path)
+    first = files[0]
 
-    if not duration:
-        raise PermanentStageError(f"Downloaded file for {job.source_key} has no readable duration (corrupt or not a video).")
+    if _is_video(first):
+        duration = probe_duration(first)
 
-    frame_path = extract_frame(video_path, min(PHASH_FRAME_SECONDS, duration / 2), src_dir / "frame.jpg")
+        if not duration:
+            raise PermanentStageError(f"Downloaded file for {job.source_key} has no readable duration (corrupt or not a video).")
+
+        frame_path = extract_frame(first, min(PHASH_FRAME_SECONDS, duration / 2), src_dir / "frame.jpg")
+    else:
+        frame_path = src_dir / "frame.jpg"
+
+        with Image.open(first) as image:
+            image.convert("RGB").save(frame_path, quality=92)
 
     with Image.open(frame_path) as frame:
         phash = dhash(frame)
@@ -158,40 +241,65 @@ def download_stage(
         if other_job and other_job != job.id:
             raise DuplicateSourceError(job.source_key, similar.key, other_job, distance)
 
-    ctx.repo.set_artifact(job.id, "source_video", str(video_path))
+    if media_type == MediaType.VIDEO:
+        ctx.repo.set_artifact(job.id, "source_video", str(first))
+
     ctx.repo.set_artifact(job.id, "frame", str(frame_path))
+
+
+def _brand_hints(job: Job) -> List[str]:
+    source = job.source
+    return [h for h in (source.author_handle, source.author_name) if h] if source else []
 
 
 def transcribe_stage(
     job: Job,
     ctx: StageContext,
 ) -> None:
-    """downloaded -> transcribed: speech to timestamped text + language, and flag burned-in on-screen text."""
+    """
+    downloaded -> transcribed: speech to timestamped text + language (videos), OCR of on-screen text (every image,
+    sampled video frames) and the headline band of the cover image or first frame.
+    """
     _require_source(job)
     src_dir = ctx.workspace.source_dir(job.source_key)
-    video_path = src_dir / "source.mp4"
     transcript_path = src_dir / "transcript.json"
+    media = load_media(src_dir)
 
-    if not video_path.exists():
-        raise PermanentStageError(f"Source video missing at {video_path}; move the job back to 'found' to re-download.")
+    if not media:
+        raise PermanentStageError(f"Source media missing in {src_dir}; move the job back to 'found' to re-download.")
+
+    media_type, files = media
 
     if transcript_path.exists():
         transcript = Transcript.model_validate_json(transcript_path.read_text(encoding="utf-8"))
         logger.debug("Source %s already transcribed; reusing %s", job.source_key, transcript_path)
     else:
-        duration = probe_duration(video_path) or 0.0
+        if media_type == MediaType.VIDEO:
+            video_path = files[0]
+            duration = probe_duration(video_path) or 0.0
 
-        if has_audio_stream(video_path):
-            audio_path = extract_audio(video_path, src_dir / "audio.wav")
-            transcript = ctx.transcriber.transcribe(audio_path)
+            if has_audio_stream(video_path):
+                audio_path = extract_audio(video_path, src_dir / "audio.wav")
+                transcript = ctx.transcriber.transcribe(audio_path)
+            else:
+                logger.info("Source %s has no audio stream; storing an empty transcript", job.source_key)
+                transcript = Transcript()
+
+            transcript.duration_seconds = round(duration, 3)
+            cover = src_dir / "frame.jpg"
         else:
-            logger.info("Source %s has no audio stream; storing an empty transcript", job.source_key)
             transcript = Transcript()
-
-        transcript.duration_seconds = round(duration, 3)
+            video_path = None
+            duration = 0.0
+            cover = files[0]
 
         if ctx.ocr is not None:
-            transcript.onscreen_text = ctx.ocr.detect(video_path, duration)
+            if media_type == MediaType.VIDEO:
+                transcript.onscreen_text = ctx.ocr.detect(video_path, duration)
+            else:
+                transcript.onscreen_text = ctx.ocr.read_images([f for f in files if not _is_video(f)])
+
+            transcript.headline = _detect_cover_headline(ctx, job, cover, transcript)
 
         transcript_path.write_text(json.dumps(transcript.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -202,6 +310,22 @@ def transcribe_stage(
 
     ctx.repo.upsert_source(job.source.model_copy(update={k: v for k, v in updates.items() if v is not None}))
     ctx.repo.set_artifact(job.id, "transcript", str(transcript_path))
+
+
+def _detect_cover_headline(ctx: StageContext, job: Job, cover: Path, transcript: Transcript) -> Optional[Headline]:
+    """Headline band of the cover image (or first video frame), from OCR lines with boxes."""
+    if not cover.exists() or not hasattr(ctx.ocr, "read_image") or not ctx.ocr.available():
+        return None
+
+    with Image.open(cover) as image:
+        width, height = image.size
+
+    cover_lines = [t for t in (transcript.onscreen_text or []) if t.box and t.media_file == cover.name]
+
+    if not cover_lines:
+        cover_lines = ctx.ocr.read_image(cover, media_file=cover.name)
+
+    return detect_headline(cover_lines, width, height, brand_hints=_brand_hints(job), media_file=cover.name)
 
 
 def _load_transcript(ctx: StageContext, job: Job) -> Transcript:
@@ -282,10 +406,17 @@ def translate_stage(
         for i, s in enumerate(transcript.segments)
         if s.text.strip()
     ]
-    onscreen = [t.text for t in (transcript.onscreen_text or [])]
+    headline_source = " ".join(transcript.headline.text.split()) if transcript.headline else ""
+    headline_lines = set(transcript.headline.text.splitlines()) if transcript.headline else set()
+    brand_line = transcript.headline.brand_text if transcript.headline else None
+    # The headline travels on its own; its OCR lines and the brand tag are not translated twice.
+    onscreen = [
+        t.text for t in (transcript.onscreen_text or [])
+        if t.text not in headline_lines and t.text != brand_line
+    ]
     source_caption = job.source.caption or job.source.title or ""
 
-    if not inputs and not onscreen and not source_caption.strip():
+    if not inputs and not onscreen and not source_caption.strip() and not headline_source:
         draft = TranslationDraft(caption="", hashtags=[])
     else:
         draft = translator.translate(TranslationInput(
@@ -294,6 +425,7 @@ def translate_stage(
             mode=job.mode,
             segments=inputs,
             source_caption=source_caption,
+            headline=headline_source or None,
             onscreen_text=onscreen,
             glossary=glossary,
         ))
@@ -328,6 +460,8 @@ def translate_stage(
             TranslatedSegment(index=s.index, start=s.start, end=s.end, source_text=s.text, text=by_index[s.index], max_chars=s.max_chars)
             for s in inputs
         ],
+        headline=auto_highlight(draft.headline.strip()) if headline_source else "",
+        headline_source=headline_source,
         caption=draft.caption.strip(),
         hashtags=_merge_hashtags(draft.hashtags, [*page.default_hashtags, *_niche_hashtags(page)]),
         onscreen_text=[TranslatedOnScreenText(source=o.source, text=o.text) for o in draft.onscreen_text],

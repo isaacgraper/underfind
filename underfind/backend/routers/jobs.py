@@ -12,6 +12,7 @@ from underfind.backend.db.pipeline_repo import PipelineRepository
 from underfind.backend.dependencies import get_pipeline_repo, get_pipeline_runner
 from underfind.backend.schemas.pipeline import (
     AssignPageRequest,
+    CreateJobFromFilesRequest,
     CreateJobFromUrlRequest,
     Job,
     JobEvent,
@@ -37,6 +38,25 @@ def create_job_from_url(
     """Opens a localization job from a YouTube, Instagram or TikTok video URL."""
     logger.debug("API POST /api/jobs url='%s' page=%s mode=%s", req.url, req.page_id, req.mode)
     return JobService(repo).open_job_from_url(req.url, page_id=req.page_id, mode=req.mode, force=req.force, local_only=req.local_only)
+
+
+@router.post("/jobs/from-files", response_model=Job)
+def create_job_from_files(
+    req: CreateJobFromFilesRequest,
+    repo: PipelineRepository = Depends(get_pipeline_repo),
+) -> Job:
+    """Opens a job from image/video files on this machine (saved posts, carousels, your own material)."""
+    logger.debug("API POST /api/jobs/from-files %d files page=%s", len(req.files), req.page_id)
+    return JobService(repo).open_job_from_files(
+        req.files,
+        source_url=req.source_url,
+        caption=req.caption,
+        author_handle=req.author_handle,
+        page_id=req.page_id,
+        mode=req.mode,
+        force=req.force,
+        local_only=req.local_only,
+    )
 
 
 @router.post("/jobs/from-video", response_model=Job)
@@ -208,6 +228,10 @@ def update_job_translation(
 
     if req.caption is not None:
         translation.caption = req.caption.strip()
+        translation.edited = True
+
+    if req.headline is not None:
+        translation.headline = req.headline.strip()
         translation.edited = True
 
     if req.hashtags is not None:

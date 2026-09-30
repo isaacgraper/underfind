@@ -22,7 +22,7 @@ _IGNORED_TEXT = {"tiktok", "instagram", "reels", "youtube", "shorts"}
 class OnScreenTextDetector:
     """
     Samples frames and runs OCR to find burned-in text (captions, titles) that a translated version must cover.
-    Optional: needs the `rapidocr-onnxruntime` package (poetry install -E ocr). Without it, detection is skipped.
+    Uses the `rapidocr-onnxruntime` package (models bundled, runs offline). Without it, detection is skipped.
     """
 
     def __init__(
@@ -48,8 +48,45 @@ class OnScreenTextDetector:
             return self._engine
 
     def _read_text(self, image_path: Path) -> List[tuple[str, float]]:
+        return [(item.text, item.confidence) for item in self.read_image(image_path)]
+
+    def read_image(
+        self,
+        image_path: Path,
+        at_seconds: float = 0.0,
+        media_file: Optional[str] = None,
+    ) -> List[OnScreenText]:
+        """Every text line in one image with its box, above the confidence threshold (no watermark filtering)."""
         result, _elapsed = self._get_engine()(str(image_path))
-        return [(item[1], float(item[2])) for item in (result or [])]
+        lines: List[OnScreenText] = []
+
+        for quad, text, score in result or []:
+            if float(score) < self.min_confidence or len(text.strip()) < 2:
+                continue
+
+            xs = [int(point[0]) for point in quad]
+            ys = [int(point[1]) for point in quad]
+            lines.append(OnScreenText(
+                at_seconds=at_seconds,
+                text=text.strip(),
+                confidence=round(float(score), 3),
+                box=[min(xs), min(ys), max(xs), max(ys)],
+                media_file=media_file,
+            ))
+
+        return lines
+
+    def read_images(self, paths: List[Path]) -> Optional[List[OnScreenText]]:
+        """OCR for image posts and carousels; None when OCR isn't installed."""
+        if not self.available():
+            return None
+
+        found: List[OnScreenText] = []
+
+        for path in paths:
+            found.extend(self.read_image(path, media_file=path.name))
+
+        return found
 
     @staticmethod
     def _keep(text: str) -> bool:

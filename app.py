@@ -17,7 +17,7 @@ from underfind.backend.cli import main as cli_main
 
 if __name__ == "__main__":
     # If subcommands are passed via command line, delegate to Rich CLI
-    if len(sys.argv) > 1 and sys.argv[1] in ("search", "trending", "blueprint", "serve", "worker", "run", "models"):
+    if len(sys.argv) > 1 and sys.argv[1] in ("search", "trending", "blueprint", "serve", "worker", "run", "models", "add"):
         cli_main()
     else:
         # Default: start the web engine & FastAPI server on http://localhost:8000

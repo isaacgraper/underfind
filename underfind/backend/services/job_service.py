@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from typing import Callable, Optional
+import hashlib
+from pathlib import Path
+from typing import Callable, List, Optional
 
 import requests
 
 from underfind.backend.core.constants import DEFAULT_LOCALIZATION_MODE
-from underfind.backend.core.errors import SourceAlreadyUsedError
+from underfind.backend.core.errors import PermanentStageError, SourceAlreadyUsedError
 from underfind.backend.core.logger import logger
 from underfind.backend.core.utils import parse_source_url, is_tiktok_short_link
 from underfind.backend.db.pipeline_repo import PipelineRepository
@@ -100,3 +102,50 @@ class JobService:
         local_only: Optional[bool] = None,
     ) -> Job:
         return self.open_job(self.source_from_url(url), page_id=page_id, mode=mode, force=force, local_only=local_only)
+
+    def open_job_from_files(
+        self,
+        files: List[str],
+        source_url: Optional[str] = None,
+        caption: Optional[str] = None,
+        author_handle: Optional[str] = None,
+        page_id: Optional[int] = None,
+        mode: str = DEFAULT_LOCALIZATION_MODE,
+        force: bool = False,
+        local_only: Optional[bool] = None,
+    ) -> Job:
+        """
+        A job from media already on this machine. The source id is a content hash of the files, so the same
+        files never make two jobs; a given source_url is also checked against the registry of used posts.
+        """
+        paths = [Path(f).expanduser().resolve() for f in files]
+        missing = [str(p) for p in paths if not p.is_file()]
+
+        if missing:
+            raise ValueError(f"Files not found: {missing}")
+
+        digest = hashlib.sha1()
+
+        for path in paths:
+            digest.update(path.read_bytes())
+
+        if source_url and not force:
+            try:
+                linked = self.source_from_url(source_url)
+            except ValueError:
+                linked = None
+
+            existing = self.repo.get_source_job_id(linked.key) if linked else None
+
+            if existing:
+                raise SourceAlreadyUsedError(linked.key, existing_job_id=existing)
+
+        source = SourceVideo(
+            platform=Platform.LOCAL,
+            source_id=digest.hexdigest()[:16],
+            url=source_url or f"local://{paths[0].name}",
+            caption=caption,
+            author_handle=author_handle,
+            media_files=[str(p) for p in paths],
+        )
+        return self.open_job(source, page_id=page_id, mode=mode, force=force, local_only=local_only)
