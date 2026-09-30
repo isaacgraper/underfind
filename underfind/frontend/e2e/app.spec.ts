@@ -125,21 +125,23 @@ test('exports lists the delivered post', async ({ page }) => {
   await page.goto('/#/exports');
   await expect(page.getByText('GTA VI AGORA TEM MAPA CONFIRMADO')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Copiar legenda' })).toBeVisible();
+  await page.screenshot({ path: path.join(shots, 'exports.png') });
 });
 
 test('pipeline: discard shows an undo toast and undo restores the post', async ({ page }) => {
   await page.goto('/#/pipeline');
   const cards = page.locator('.jobcard');
   await expect(cards.first()).toBeVisible({ timeout: 30_000 });
-  const total = await page.locator('.lane:not([data-lane="done"]) .jobcard').count();
+  await expect(page.locator('.lane[data-lane="needs"] .jobcard').first()).toBeVisible({ timeout: 30_000 });
+  const total = await page.locator('.lane[data-lane="needs"] .jobcard').count();
   expect(total).toBeGreaterThan(0);
 
-  await page.locator('.lane:not([data-lane="done"]) .jobcard').first().getByRole('button', { name: 'Descartar' }).click();
+  await page.locator('.lane[data-lane="needs"] .jobcard').first().getByRole('button', { name: 'Descartar' }).click();
   await expect(page.getByText('Post descartado')).toBeVisible();
-  await expect(page.locator('.lane:not([data-lane="done"]) .jobcard')).toHaveCount(total - 1);
+  await expect(page.locator('.lane[data-lane="needs"] .jobcard')).toHaveCount(total - 1);
 
   await page.getByRole('button', { name: 'Desfazer' }).click();
-  await expect(page.locator('.lane:not([data-lane="done"]) .jobcard')).toHaveCount(total);
+  await expect(page.locator('.lane[data-lane="needs"] .jobcard')).toHaveCount(total);
 });
 
 test('pages: create with local AI on by default, edit, delete by holding', async ({ page }) => {
@@ -185,6 +187,7 @@ for (const route of routes) {
   test(`accessibility: ${route} has no serious or critical violations`, async ({ page }) => {
     await page.goto(`/${route}`);
     await page.waitForTimeout(600);
+    await page.screenshot({ path: path.join(shots, `${route.slice(2)}.png`) });
     const { violations } = await new AxeBuilder({ page }).analyze();
     const bad = violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
     expect(bad.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
