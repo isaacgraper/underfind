@@ -51,6 +51,56 @@ jobs:
         working-directory: underfind/frontend
         run: npm ci
 
+      - name: Design Lint
+        working-directory: underfind/frontend
+        run: npm run lint:design
+
       - name: Compile Production Bundle
         working-directory: underfind/frontend
         run: npm run build
+
+  e2e:
+    name: End-to-End (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Backend Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi uvicorn pydantic google-api-python-client youtube-transcript-api requests python-dotenv rich tzdata yt-dlp pillow imageio-ffmpeg pyyaml httpx
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: underfind/frontend/package-lock.json
+
+      - name: Install Frontend Dependencies
+        working-directory: underfind/frontend
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: underfind/frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Build and Run Playwright Suite
+        working-directory: underfind/frontend
+        run: npm run e2e
+
+      - name: Upload Screenshots and Traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-output
+          path: |
+            underfind/frontend/e2e/.shots
+            underfind/frontend/e2e/.results

@@ -10,6 +10,7 @@ from underfind.backend.routers.dashboard import router as dashboard_router
 from underfind.backend.routers.jobs import router as jobs_router
 from underfind.backend.routers.pages import router as pages_router
 from underfind.backend.routers.sourcing import router as sourcing_router
+from underfind.backend.routers.summary import router as summary_router
 
 api_router = APIRouter(prefix="/api")
 
@@ -21,6 +22,7 @@ api_router.include_router(dashboard_router)
 api_router.include_router(jobs_router)
 api_router.include_router(pages_router)
 api_router.include_router(sourcing_router)
+api_router.include_router(summary_router)
 
 __all__ = [
     "api_router",

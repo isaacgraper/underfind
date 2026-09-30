@@ -1,0 +1,35 @@
+.skip { position: absolute; left: var(--space-2); top: -60px; padding: var(--space-2) var(--space-3); background: var(--bg-raised); border-radius: var(--radius-control); z-index: 60; }
+.skip:focus { top: var(--space-2); }
+
+.topbar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: var(--space-4); height: 52px; padding: 0 var(--space-4); background: var(--bg-canvas); border-bottom: 1px solid var(--line); }
+.topbar__brand { font: 600 var(--text-16) var(--font-ui); color: var(--text-primary); text-decoration: none; letter-spacing: -0.01em; }
+.topbar__nav { display: flex; gap: var(--space-1); }
+.topbar__link, .topbar__icon { position: relative; display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--control-h); padding: 0 var(--space-3); border-radius: var(--radius-control); color: var(--text-secondary); text-decoration: none; font: 500 var(--text-14) var(--font-ui); transition: color var(--dur-hover) var(--ease-out), background-color var(--dur-hover) var(--ease-out); }
+.topbar__icon { padding: 0; width: var(--control-h); justify-content: center; }
+.topbar__link[aria-current='page'], .topbar__icon[aria-current='page'] { color: var(--text-primary); background: var(--bg-raised); }
+@media (hover: hover) and (pointer: fine) {
+  .topbar__link:hover, .topbar__icon:hover { color: var(--text-primary); }
+}
+.topbar__count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: var(--radius-pill); background: var(--bg-raised); color: var(--text-secondary); font-size: var(--text-12); display: inline-flex; align-items: center; justify-content: center; }
+.topbar__count--accent { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+.topbar__status { margin: 0 auto 0 var(--space-2); color: var(--text-secondary); font: 400 var(--text-13) var(--font-ui); }
+.topbar__ai { padding: 2px var(--space-2); border-radius: var(--radius-pill); font: 500 var(--text-12) var(--font-ui); background: var(--state-done-wash); color: var(--state-done); }
+.topbar__ai[data-mode='online'] { background: var(--state-queued-wash); color: var(--state-queued); }
+
+.banner { margin: 0; padding: var(--space-2) var(--space-4); background: var(--state-failed-wash); color: var(--state-failed); font: 500 var(--text-13) var(--font-ui); }
+
+.main { padding: var(--space-6) var(--space-4) var(--space-8); max-width: 1280px; margin: 0 auto; opacity: 1; transform: translateY(0); transition: opacity var(--dur-pop) var(--ease-out); }
+@starting-style { .main { opacity: 0; } }
+
+.view-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); margin-bottom: var(--space-4); }
+.view-head h1 { margin: 0 auto 0 0; font: 600 var(--text-20) var(--font-ui); letter-spacing: -0.01em; }
+.muted { color: var(--text-secondary); }
+.error-text { color: var(--state-failed); }
+
+@media (max-width: 720px) {
+  .topbar { flex-wrap: wrap; height: auto; padding: var(--space-2) var(--space-3); gap: var(--space-2); }
+  .topbar__status { order: 9; flex-basis: 100%; margin: 0; }
+  .topbar__nav { order: 3; flex-basis: 100%; overflow-x: auto; }
+  .topbar__brand { margin-right: auto; }
+  .main { padding: var(--space-4) var(--space-3) var(--space-8); }
+}

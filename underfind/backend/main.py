@@ -34,6 +34,7 @@ async def lifespan(app: FastAPI):
     """Starts the pipeline worker in-process when PIPELINE_WORKER_ENABLED=true."""
     stop_event = threading.Event()
     worker: threading.Thread | None = None
+    app.state.worker_running = False
 
     if os.environ.get("PIPELINE_WORKER_ENABLED", "").lower() in ("1", "true", "yes"):
         from underfind.backend.pipeline.runner import get_default_runner
@@ -46,10 +47,12 @@ async def lifespan(app: FastAPI):
             daemon=True,
         )
         worker.start()
+        app.state.worker_running = True
 
     yield
 
     stop_event.set()
+    app.state.worker_running = False
 
     if worker is not None:
         worker.join(timeout=10)

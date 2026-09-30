@@ -1,0 +1,96 @@
+/* Design tokens. Decisions and contrast measurements: DESIGN.md sections 2, 7 and 9. */
+:root {
+  /* Surfaces: Ink, Plate, Platen */
+  --bg-canvas: #0f0d14;
+  --bg-surface: #16131d;
+  --bg-raised: #1e1a28;
+  --bg-input: #1e1a28;
+  --line: rgba(236, 230, 255, 0.09);
+  --line-strong: rgba(236, 230, 255, 0.16);
+
+  /* Text */
+  --text-primary: #f3f0f8;
+  --text-secondary: #b4adc4;
+  --text-tertiary: #8c849e;
+  --text-disabled: #6b647a;
+
+  /* The one accent: "needs you" */
+  --accent: #e879f9;
+  --accent-pressed: #d946ef;
+  --on-accent: #16131d;
+  --accent-wash: rgba(232, 121, 249, 0.12);
+
+  /* State only */
+  --state-queued: #fbbf24;
+  --state-working: #38bdf8;
+  --state-done: #4ade80;
+  --state-failed: #f87171;
+  --state-failed-wash: rgba(248, 113, 113, 0.12);
+  --state-working-wash: rgba(56, 189, 248, 0.12);
+  --state-queued-wash: rgba(251, 191, 36, 0.12);
+  --state-done-wash: rgba(74, 222, 128, 0.12);
+
+  /* Brand gradient: rendered previews and the review headline field only */
+  --brand-from: #d946ef;
+  --brand-to: #fb923c;
+  --preview-black: #000000;
+  --preview-white: #ffffff;
+
+  /* Type */
+  --font-ui: 'Fira Sans', system-ui, sans-serif;
+  --font-data: 'Fira Code', ui-monospace, monospace;
+  --font-display: 'Anton', 'Fira Sans', sans-serif;
+  --text-12: 0.75rem;
+  --text-13: 0.8125rem;
+  --text-14: 0.875rem;
+  --text-16: 1rem;
+  --text-20: 1.25rem;
+  --text-26: 1.625rem;
+
+  /* Space (4 px base, dense) and controls */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --control-h: 36px;
+  --row-h: 44px;
+
+  /* Radius by role */
+  --radius-media: 6px;
+  --radius-control: 10px;
+  --radius-panel: 14px;
+  --radius-pill: 9999px;
+
+  /* Overlay depth: offset and soft blur, never a zero-offset halo */
+  --shadow-overlay: 0 12px 32px rgba(0, 0, 0, 0.45);
+
+  /* Motion (curves from emil-design-eng) */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-press: 120ms;
+  --dur-hover: 100ms;
+  --dur-pop: 180ms;
+  --dur-modal: 220ms;
+  --dur-settle: 240ms;
+  --dur-exit: 160ms;
+  --enter-y: 8px;
+  --enter-scale: 0.95;
+  --press-scale: 0.97;
+}
+
+@media (pointer: coarse) {
+  :root {
+    --control-h: 44px;
+  }
+}
+
+/* Reduced motion means gentler, not none: drop travel and scale, keep opacity and color transitions. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --enter-y: 0px;
+    --enter-scale: 1;
+  }
+}

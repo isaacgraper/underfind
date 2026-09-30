@@ -235,4 +235,6 @@ Online means: translation through the free LLM chain (NVIDIA → Atria → OpenR
 | 5 | Render: headline card / letterbox / full bleed as reel, post, carousel | done |
 | 6 | Export folder + manifest + webhook, render review gate | done |
 | 7 | Automated sourcing: niche seed pages and keywords, scoring, scheduled scans | done |
-| 8 | Frontend refactor (pipeline board, candidates inbox, review screens, pages/templates) + end-to-end tests through the real UI | next |
+| 8 | Frontend refactor (pipeline board, candidates inbox, review screens, pages/templates) + end-to-end tests through the real UI | done |
+
+Phase 8 details: the UI lives in `underfind/frontend/src/{app,ui,views,theme,api}` (DESIGN.md), `npm run lint:design` enforces the design rules, and `npm run e2e` builds the UI and drives it with Playwright against `underfind/backend/e2e/server.py` (real API, worker, ffmpeg render and exporter; fake download, Whisper, translation, OCR and scanners).

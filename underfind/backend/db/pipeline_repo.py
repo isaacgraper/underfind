@@ -595,6 +595,31 @@ class PipelineRepository:
             for r in rows
         ]
 
+    def lane_counts(self) -> Dict[str, int]:
+        """
+        Jobs per pipeline lane (discarded jobs excluded):
+          needs_you  translated and waiting for translation approval, rendered and waiting for render approval
+          working    everything between found and rendered that is moving (incl. approved, waiting for the worker)
+          failed     failed jobs
+          done       exported jobs
+        """
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    SUM(CASE WHEN (status = 'translated' AND translation_approved = 0)
+                               OR (status = 'rendered' AND render_approved = 0) THEN 1 ELSE 0 END) AS needs_you,
+                    SUM(CASE WHEN status IN ('found', 'downloaded', 'transcribed', 'voiced')
+                               OR (status = 'translated' AND translation_approved = 1)
+                               OR (status = 'rendered' AND render_approved = 1) THEN 1 ELSE 0 END) AS working,
+                    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+                    SUM(CASE WHEN status = 'exported' THEN 1 ELSE 0 END) AS done
+                FROM jobs
+                """
+            ).fetchone()
+
+        return {k: int(row[k] or 0) for k in ("needs_you", "working", "failed", "done")}
+
     def count_jobs_by_status(self) -> Dict[str, int]:
         with self._get_connection() as conn:
             rows = conn.execute("SELECT status, COUNT(*) AS n FROM jobs GROUP BY status").fetchall()
