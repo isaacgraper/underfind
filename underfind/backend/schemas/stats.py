@@ -26,3 +26,4 @@ class HealthResponse(BaseModel):
     service: str
     version: str
     youtube_api_configured: bool
+    ai_mode: str = "local"

@@ -4,3 +4,4 @@ export * from './dashboard';
 export * from './blueprint';
 export * from './navigation';
 export * from './api';
+export * from './pipeline';

@@ -253,6 +253,7 @@ class PipelineRepository:
             attempts=row["attempts"] or 0,
             locked_by=row["locked_by"],
             translation_approved=bool(row["translation_approved"]),
+            local_only=None if row["local_only"] is None else bool(row["local_only"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             source=source,
@@ -264,6 +265,7 @@ class PipelineRepository:
         page_id: Optional[int] = None,
         mode: str = DEFAULT_LOCALIZATION_MODE,
         note: Optional[str] = None,
+        local_only: Optional[bool] = None,
     ) -> Job:
         if not self.get_source(source_key):
             raise NotFoundError(f"Source video '{source_key}' not found.")
@@ -278,10 +280,10 @@ class PipelineRepository:
             try:
                 conn.execute(
                     """
-                    INSERT INTO jobs (id, source_key, page_id, status, mode, artifacts_json, notes, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, '{}', ?, ?, ?)
+                    INSERT INTO jobs (id, source_key, page_id, status, mode, artifacts_json, notes, local_only, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, '{}', ?, ?, ?, ?)
                     """,
-                    (job_id, source_key, page_id, JobStatus.FOUND.value, mode, note, now, now)
+                    (job_id, source_key, page_id, JobStatus.FOUND.value, mode, note, None if local_only is None else int(local_only), now, now)
                 )
             except sqlite3.IntegrityError as err:
                 raise InvalidTransitionError(f"Source '{source_key}' already has a job for page {page_id}.") from err
@@ -458,6 +460,22 @@ class PipelineRepository:
 
         return [r["id"] for r in rows]
 
+    def set_local_only(
+        self,
+        job_id: str,
+        local_only: Optional[bool],
+    ) -> Job:
+        self.get_job(job_id)
+
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE jobs SET local_only = ?, updated_at = ? WHERE id = ?",
+                (None if local_only is None else int(local_only), _now(), job_id)
+            )
+            conn.commit()
+
+        return self.get_job(job_id)
+
     def set_translation_approved(
         self,
         job_id: str,
@@ -560,6 +578,7 @@ class PipelineRepository:
             caption_footer=row["caption_footer"],
             tts_voice=row["tts_voice"],
             auto_approve_translation=bool(row["auto_approve_translation"]),
+            local_only=bool(row["local_only"]),
             active=bool(row["active"]),
         )
 
@@ -575,7 +594,7 @@ class PipelineRepository:
         values = (
             page.display_name, page.handle.lstrip("@"), page.avatar_path, page.language, page.template_id,
             json.dumps(page.default_hashtags), page.caption_footer, page.tts_voice,
-            int(page.auto_approve_translation), int(page.active),
+            int(page.auto_approve_translation), int(page.local_only), int(page.active),
         )
 
         with self._get_connection() as conn:
@@ -585,9 +604,9 @@ class PipelineRepository:
                     INSERT INTO page_profiles (
                         display_name, handle, avatar_path, language, template_id,
                         default_hashtags_json, caption_footer, tts_voice, auto_approve_translation,
-                        active, created_at, updated_at
+                        local_only, active, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (*values, now, now)
                 )
@@ -598,7 +617,7 @@ class PipelineRepository:
                     UPDATE page_profiles SET
                         display_name = ?, handle = ?, avatar_path = ?, language = ?, template_id = ?,
                         default_hashtags_json = ?, caption_footer = ?, tts_voice = ?,
-                        auto_approve_translation = ?, active = ?, updated_at = ?
+                        auto_approve_translation = ?, local_only = ?, active = ?, updated_at = ?
                     WHERE id = ?
                     """,
                     (*values, now, page.id)

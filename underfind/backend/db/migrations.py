@@ -166,10 +166,20 @@ def _v3_translation_review(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE page_profiles ADD COLUMN auto_approve_translation INTEGER NOT NULL DEFAULT 0")
 
 
+def _v4_local_only(conn: sqlite3.Connection) -> None:
+    """"Local only" checkbox on pages (default checked) and an optional per-job override."""
+    if not _column_exists(conn, "page_profiles", "local_only"):
+        conn.execute("ALTER TABLE page_profiles ADD COLUMN local_only INTEGER NOT NULL DEFAULT 1")
+
+    if not _column_exists(conn, "jobs", "local_only"):
+        conn.execute("ALTER TABLE jobs ADD COLUMN local_only INTEGER")
+
+
 MIGRATIONS: List[Tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (1, _v1_localization_pipeline),
     (2, _v2_worker_and_media),
     (3, _v3_translation_review),
+    (4, _v4_local_only),
 ]
 
 

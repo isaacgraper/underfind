@@ -109,9 +109,11 @@ OCR_SAMPLE_FRAMES: int = 6
 OCR_MIN_CONFIDENCE: float = 0.6
 OCR_MIN_TEXT_LENGTH: int = 3
 
-# Translation: local by default (OPUS-MT models on CTranslate2, offline after the first model download).
-# "llm" routes through the LLM gateway (config/llm.yaml) and is opt-in only.
-DEFAULT_TRANSLATION_BACKEND: str = "local"
+# AI mode. "local" (default) is a hard lock: every AI step runs on this machine (Whisper, OPUS-MT on CTranslate2,
+# Piper) and no job can reach an online model. "online" unlocks the online backends (LLM gateway in
+# config/llm.yaml for translation, edge-tts for voices) for pages/jobs whose "local only" box is unchecked.
+AI_MODES: List[str] = ["local", "online"]
+DEFAULT_AI_MODE: str = "local"
 TRANSLATOR_ROLE: str = "translator"
 MODELS_DIR = DATA_DIR / "models"
 TRANSLATION_MODELS_DIR = MODELS_DIR / "translate"
@@ -134,8 +136,7 @@ SUBTITLE_SIDE_MARGIN_RATIO: float = 0.06
 DUB_MAX_SPEEDUP: float = 1.35
 DUB_BACKGROUND_VOLUME: float = 0.12
 DUB_SAMPLE_RATE: int = 44100
-# TTS: local Piper voices by default (offline after the first voice download); "edge" (online edge-tts) is opt-in.
-DEFAULT_TTS_BACKEND: str = "piper"
+# TTS: local Piper voices; edge-tts only for online jobs.
 PIPER_VOICES_URL: str = "https://huggingface.co/rhasspy/piper-voices/resolve/main"
 DEFAULT_TTS_VOICES: Dict[str, str] = {
     "pt": "pt_BR-faber-medium",

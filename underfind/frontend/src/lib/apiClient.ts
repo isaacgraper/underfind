@@ -5,6 +5,9 @@ import {
   HealthResponse,
   DashboardStats,
   IdeaItem,
+  PageProfile,
+  Job,
+  LocalizationMode,
 } from '../types';
 
 const API_BASE = '/api';
@@ -130,6 +133,38 @@ export const apiClient = {
       throw new Error(err || 'Failed to extract video blueprint');
     }
     return res.json();
+  },
+
+  async listPages(): Promise<PageProfile[]> {
+    const res = await fetch(`${API_BASE}/pages?active_only=true`);
+    if (!res.ok) throw new Error('Failed to load pages');
+    return res.json();
+  },
+
+  async createJobFromVideo(
+    video: VideoItem,
+    options: { pageId: number; mode: LocalizationMode; localOnly: boolean },
+  ): Promise<Job> {
+    const params = new URLSearchParams({
+      page_id: String(options.pageId),
+      mode: options.mode,
+      local_only: String(options.localOnly),
+    });
+    const res = await fetch(`${API_BASE}/jobs/from-video?${params.toString()}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(video),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new Error(body?.detail || 'Failed to create localization job');
+    }
+    return res.json();
+  },
+
+  async runJob(jobId: string): Promise<void> {
+    const res = await fetch(`${API_BASE}/jobs/${jobId}/run`, { method: 'POST' });
+    if (!res.ok) throw new Error('Failed to start job');
   },
 
   async getVideoDetails(videoId: string): Promise<VideoItem> {

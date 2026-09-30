@@ -11,7 +11,6 @@ from typing import List, Optional, Protocol
 import requests
 
 from underfind.backend.core.constants import (
-    DEFAULT_TTS_BACKEND,
     DEFAULT_TTS_VOICES,
     EDGE_TTS_VOICES,
     PIPER_VOICES_URL,
@@ -129,10 +128,9 @@ class EdgeTtsProvider:
         return out_path
 
 
-def build_tts() -> TtsProvider:
-    """TTS_BACKEND=piper (local, default) or edge (online, opt-in)."""
-    backend = os.environ.get("TTS_BACKEND", DEFAULT_TTS_BACKEND).lower()
-    return EdgeTtsProvider() if backend == "edge" else PiperTtsProvider()
+def build_tts(local: bool = True) -> TtsProvider:
+    """Piper on this machine, or edge-tts (online) for jobs allowed to go online."""
+    return PiperTtsProvider() if local else EdgeTtsProvider()
 
 
 def default_voice(language: str, voices: Optional[dict] = None) -> str:

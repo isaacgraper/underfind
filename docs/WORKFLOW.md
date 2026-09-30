@@ -164,4 +164,12 @@ Translation details: `pt-BR` pages use the Brazilian `pb` model when published, 
 
 Limits of local translation versus an LLM: literal phrasing (less slang adaptation), no condensing of lines that overrun their time slot (subtitles wrap to 2 lines, dubs speed up to 1.35×), and the post caption is translated rather than rewritten. The review gate is where these get fixed by hand.
 
-Opt-in online backends, never used unless configured: `TRANSLATION_BACKEND=llm` (free LLM chain NVIDIA → Atria → OpenRouter in `config/llm.yaml`, Claude only as an explicit role) and `TTS_BACKEND=edge` (edge-tts).
+### Switching between local and online
+
+| Level | Control | Default | Effect |
+|---|---|---|---|
+| Server / worker | `--local` / `--online` flag on `python app.py`, `serve`, `worker`, `run` (or `AI_MODE` env) | `local` | `local` is a hard lock: nothing online, whatever pages/jobs say. `online` lets the settings below decide. |
+| Page | "Somente IA local" checkbox (`local_only`) | checked | Unchecked pages may use online models when the server runs `--online`. |
+| Job | same checkbox in the "Localizar" panel of the video modal, `local_only` on `POST /api/jobs`, `PATCH /api/jobs/{id}/local-only` | inherits page | Overrides the page for one job (`null` inherits again). |
+
+Online means: translation through the free LLM chain (NVIDIA → Atria → OpenRouter in `config/llm.yaml`; Claude only as an explicit role) with condensing of lines that overrun, and edge-tts voices for dubs. Each `translation.json` records `local: true/false` and the model that produced it; `dub.json` records the voice backend. `GET /api/health` reports the server's `ai_mode`.

@@ -9,12 +9,12 @@ from typing import Any, List, Optional
 
 from PIL import Image
 
-from underfind.backend.core.constants import DEFAULT_TRANSLATION_BACKEND, BUDGET_TOLERANCE, JOBS_DIR, SOURCES_DIR, PHASH_FRAME_SECONDS
+from underfind.backend.core.constants import AI_MODES, DEFAULT_AI_MODE, BUDGET_TOLERANCE, JOBS_DIR, SOURCES_DIR, PHASH_FRAME_SECONDS
 from underfind.backend.core.errors import DuplicateSourceError, PermanentStageError
 from underfind.backend.core.logger import logger
 from underfind.backend.db.pipeline_repo import PipelineRepository
 from underfind.backend.pipeline.download import YtDlpDownloader, source_updates_from_info
-from underfind.backend.pipeline.dub import TtsProvider, build_tts, default_voice, mix_dub, synthesize_segments
+from underfind.backend.pipeline.dub import PiperTtsProvider, TtsProvider, build_tts, default_voice, mix_dub, synthesize_segments
 from underfind.backend.pipeline.glossary import load_glossary
 from underfind.backend.pipeline.media import extract_audio, extract_frame, has_audio_stream, probe_duration
 from underfind.backend.pipeline.ocr import OnScreenTextDetector
@@ -33,15 +33,33 @@ from underfind.backend.schemas.pipeline import (
 )
 
 
-def build_translator() -> Any:
-    """TRANSLATION_BACKEND=local (offline OPUS-MT, default) or llm (LLM gateway, opt-in)."""
-    backend = os.environ.get("TRANSLATION_BACKEND", DEFAULT_TRANSLATION_BACKEND).lower()
+def current_ai_mode() -> str:
+    """AI_MODE env (set by --local / --online on the CLI). Anything unrecognized falls back to local."""
+    mode = os.environ.get("AI_MODE", DEFAULT_AI_MODE).strip().lower()
+    return mode if mode in AI_MODES else DEFAULT_AI_MODE
 
-    if backend == "llm":
+
+def build_translator(local: bool = True) -> Any:
+    """Offline OPUS-MT on this machine, or the LLM gateway (config/llm.yaml) for jobs allowed to go online."""
+    if not local:
         return LLMTranslator()
 
     from underfind.backend.pipeline.local_translate import LocalTranslator
     return LocalTranslator()
+
+
+def resolve_local(job: Job, page: Optional[PageProfile], ai_mode: str) -> bool:
+    """
+    AI_MODE=local is a hard lock: always local. With AI_MODE=online, the job's override decides,
+    otherwise the page's "local only" checkbox (checked by default).
+    """
+    if ai_mode != "online":
+        return True
+
+    if job.local_only is not None:
+        return job.local_only
+
+    return page.local_only if page is not None else True
 
 
 @dataclass
@@ -65,8 +83,36 @@ class StageContext:
     downloader: YtDlpDownloader = field(default_factory=YtDlpDownloader)
     transcriber: WhisperTranscriber = field(default_factory=WhisperTranscriber)
     ocr: Optional[OnScreenTextDetector] = field(default_factory=OnScreenTextDetector)
-    translator: Any = field(default_factory=lambda: build_translator())
-    tts: TtsProvider = field(default_factory=build_tts)
+    # Explicit backends (tests, custom setups) win; otherwise one is built per local/online choice and cached.
+    translator: Any = None
+    tts: Optional[TtsProvider] = None
+    ai_mode: str = field(default_factory=current_ai_mode)
+    _backends: dict = field(default_factory=dict, repr=False)
+
+    def uses_local(self, job: Job, page: Optional[PageProfile]) -> bool:
+        return resolve_local(job, page, self.ai_mode)
+
+    def translator_for(self, local: bool) -> Any:
+        if self.translator is not None:
+            return self.translator
+
+        key = ("translator", local)
+
+        if key not in self._backends:
+            self._backends[key] = build_translator(local)
+
+        return self._backends[key]
+
+    def tts_for(self, local: bool) -> TtsProvider:
+        if self.tts is not None:
+            return self.tts
+
+        key = ("tts", local)
+
+        if key not in self._backends:
+            self._backends[key] = build_tts(local)
+
+        return self._backends[key]
 
 
 def _require_source(job: Job) -> None:
@@ -222,6 +268,8 @@ def translate_stage(
     page = _require_page(ctx, job)
     transcript = _load_transcript(ctx, job)
     glossary = load_glossary()
+    local = ctx.uses_local(job, page)
+    translator = ctx.translator_for(local)
 
     inputs = [
         SegmentInput(index=i, start=s.start, end=s.end, text=s.text, max_chars=segment_budget(s.start, s.end, job.mode))
@@ -234,7 +282,7 @@ def translate_stage(
     if not inputs and not onscreen and not source_caption.strip():
         draft = TranslationDraft(caption="", hashtags=[])
     else:
-        draft = ctx.translator.translate(TranslationInput(
+        draft = translator.translate(TranslationInput(
             target_language=page.language,
             source_language=transcript.language,
             mode=job.mode,
@@ -259,16 +307,17 @@ def translate_stage(
     if over:
         logger.debug("Job %s: %d translated lines over budget; condensing", job.id, len(over))
 
-        for fixed in ctx.translator.shorten(page.language, over, glossary):
+        for fixed in translator.shorten(page.language, over, glossary):
             if fixed.index in by_index and fixed.text.strip():
                 by_index[fixed.index] = fixed.text.strip()
 
     translation = Translation(
+        local=local,
         source_language=transcript.language,
         target_language=page.language,
         page_id=page.id,
         mode=job.mode,
-        model=getattr(ctx.translator, "model", None),
+        model=getattr(translator, "model", None),
         segments=[
             TranslatedSegment(index=s.index, start=s.start, end=s.end, source_text=s.text, text=by_index[s.index], max_chars=s.max_chars)
             for s in inputs
@@ -324,11 +373,13 @@ def voice_stage(
     if not video_duration:
         raise PermanentStageError(f"Source video missing or unreadable at {video_path}.")
 
-    voice = page.tts_voice or default_voice(page.language, getattr(ctx.tts, "voices", None))
-    clips = synthesize_segments(translation.segments, voice, ctx.tts, job_dir / "dub_clips", video_duration)
+    tts = ctx.tts_for(ctx.uses_local(job, page))
+    voice = page.tts_voice or default_voice(page.language, getattr(tts, "voices", None))
+    clips = synthesize_segments(translation.segments, voice, tts, job_dir / "dub_clips", video_duration)
     audio_path = mix_dub(video_path, clips, video_duration, job_dir / "dub_audio.wav")
 
     report = {
+        "local": isinstance(tts, PiperTtsProvider),
         "voice": voice,
         "clips": [
             {"index": c.index, "start": c.start, "duration": round(c.duration, 3), "speedup": c.speedup}

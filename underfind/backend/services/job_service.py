@@ -69,6 +69,7 @@ class JobService:
         page_id: Optional[int] = None,
         mode: str = DEFAULT_LOCALIZATION_MODE,
         force: bool = False,
+        local_only: Optional[bool] = None,
     ) -> Job:
         """
         Creates a job for a source unless it was already used, or is a near-duplicate
@@ -88,7 +89,7 @@ class JobService:
                         raise SourceAlreadyUsedError(source.key, existing_job_id=similar_job, duplicate_of=similar.key)
 
         stored = self.repo.upsert_source(source)
-        return self.repo.create_job(stored.key, page_id=page_id, mode=mode)
+        return self.repo.create_job(stored.key, page_id=page_id, mode=mode, local_only=local_only)
 
     def open_job_from_url(
         self,
@@ -96,5 +97,6 @@ class JobService:
         page_id: Optional[int] = None,
         mode: str = DEFAULT_LOCALIZATION_MODE,
         force: bool = False,
+        local_only: Optional[bool] = None,
     ) -> Job:
-        return self.open_job(self.source_from_url(url), page_id=page_id, mode=mode, force=force)
+        return self.open_job(self.source_from_url(url), page_id=page_id, mode=mode, force=force, local_only=local_only)

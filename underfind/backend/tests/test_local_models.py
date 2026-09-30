@@ -13,7 +13,8 @@ from underfind.backend.core.errors import PermanentStageError
 from underfind.backend.pipeline.dub import EdgeTtsProvider, PiperTtsProvider, build_tts
 from underfind.backend.pipeline.local_translate import LocalTranslator, ModelStore, base_language
 from underfind.backend.pipeline.media import probe_duration
-from underfind.backend.pipeline.stages import build_translator
+from underfind.backend.pipeline.stages import StageContext, build_translator, current_ai_mode, resolve_local
+from underfind.backend.schemas.pipeline import Job, PageProfile
 from underfind.backend.pipeline.translate import LLMTranslator, SegmentInput, TranslationInput
 
 EN_PT = {
@@ -189,18 +190,47 @@ def test_piper_synthesize_writes_wav(tmp_path: Path):
     assert probe_duration(out) == pytest.approx(1.0, abs=0.05)
 
 
-def test_backends_default_to_local(monkeypatch):
-    monkeypatch.delenv("TRANSLATION_BACKEND", raising=False)
-    monkeypatch.delenv("TTS_BACKEND", raising=False)
-
+def test_backend_builders():
     assert isinstance(build_translator(), LocalTranslator)
+    assert isinstance(build_translator(local=False), LLMTranslator)
     assert isinstance(build_tts(), PiperTtsProvider)
+    assert isinstance(build_tts(local=False), EdgeTtsProvider)
 
-    monkeypatch.setenv("TRANSLATION_BACKEND", "llm")
-    monkeypatch.setenv("TTS_BACKEND", "edge")
 
-    assert isinstance(build_translator(), LLMTranslator)
-    assert isinstance(build_tts(), EdgeTtsProvider)
+@pytest.mark.parametrize("ai_mode, job_override, page_local, expected", [
+    ("local", False, False, True),    # global local is a hard lock
+    ("local", None, False, True),
+    ("online", None, True, True),     # page checkbox checked (default)
+    ("online", None, False, False),   # page unchecked
+    ("online", True, False, True),    # job forces local
+    ("online", False, True, False),   # job allows online
+    ("bogus", False, False, True),
+])
+def test_resolve_local(ai_mode, job_override, page_local, expected):
+    job = Job(id="j", source_key="youtube:x", local_only=job_override)
+    page = PageProfile(display_name="p", handle="p", local_only=page_local)
+
+    assert resolve_local(job, page, ai_mode if ai_mode in ("local", "online") else "local") is expected
+
+
+def test_current_ai_mode(monkeypatch):
+    monkeypatch.delenv("AI_MODE", raising=False)
+    assert current_ai_mode() == "local"
+
+    monkeypatch.setenv("AI_MODE", "ONLINE")
+    assert current_ai_mode() == "online"
+
+    monkeypatch.setenv("AI_MODE", "cloud")
+    assert current_ai_mode() == "local"
+
+
+def test_context_builds_one_backend_per_choice(tmp_path):
+    ctx = StageContext(repo=None, ai_mode="online")
+
+    assert isinstance(ctx.translator_for(True), LocalTranslator)
+    assert isinstance(ctx.translator_for(False), LLMTranslator)
+    assert ctx.translator_for(True) is ctx.translator_for(True)
+    assert isinstance(ctx.tts_for(True), PiperTtsProvider)
 
 
 def test_brazilian_model_preferred_then_base(tmp_path: Path):

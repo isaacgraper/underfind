@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from typing import Optional, Dict, Callable, Any
 from dotenv import load_dotenv
@@ -187,6 +188,24 @@ def cmd_blueprint(args: argparse.Namespace) -> None:
     logger.trace("CLI blueprint rendered successfully")
 
 
+def _apply_ai_mode(args: argparse.Namespace) -> None:
+    """--local / --online set AI_MODE for this process (before any runner or server is built)."""
+    mode = getattr(args, "ai_mode", None)
+
+    if mode:
+        os.environ["AI_MODE"] = mode
+
+    console.print(f"[dim]AI mode: {os.environ.get('AI_MODE', 'local')}[/]")
+
+
+def _add_ai_mode_flags(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--local", dest="ai_mode", action="store_const", const="local",
+                       help="Local AI models only (default): Whisper, OPUS-MT, Piper; nothing online")
+    group.add_argument("--online", dest="ai_mode", action="store_const", const="online",
+                       help="Allow online models (LLM gateway, edge-tts) for pages/jobs with 'local only' unchecked")
+
+
 def cmd_serve(args: argparse.Namespace) -> None:
     console.print(f"[bold #ff5500]Starting Underfind v{SERVICE_VERSION} API & Web Engine...[/]")
     start()
@@ -280,14 +299,17 @@ def main():
     p_bp.add_argument("--niche", default=None, help="Target creator niche")
     p_bp.add_argument("--json", action="store_true", help="Output JSON format")
 
-    subparsers.add_parser("serve", help="Start the FastAPI backend server")
+    p_serve = subparsers.add_parser("serve", help="Start the FastAPI backend server")
+    _add_ai_mode_flags(p_serve)
 
     p_worker = subparsers.add_parser("worker", help="Run the localization pipeline worker (polls and advances jobs)")
     p_worker.add_argument("--interval", type=float, default=None, help="Seconds between polls")
+    _add_ai_mode_flags(p_worker)
 
     p_run = subparsers.add_parser("run", help="Advance one localization job through its automated stages")
     p_run.add_argument("job_id", help="Job ID")
     p_run.add_argument("--once", action="store_true", help="Run only the next stage")
+    _add_ai_mode_flags(p_run)
 
     p_models = subparsers.add_parser("models", help="Download local translation models and Piper voices for offline use")
     p_models.add_argument("--translate", nargs="*", metavar="FROM:TO", help="Language pairs, e.g. en:pb es:en en:es")
@@ -298,6 +320,9 @@ def main():
     if not args.command:
         parser.print_help()
         sys.exit(0)
+
+    if args.command in ("serve", "worker", "run"):
+        _apply_ai_mode(args)
 
     if args.command in DISPATCH:
         DISPATCH[args.command](args)

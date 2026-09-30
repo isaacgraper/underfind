@@ -99,6 +99,7 @@ class PageProfile(BaseModel):
     caption_footer: Optional[str] = None
     tts_voice: Optional[str] = Field(default=None, description="TTS voice for dub mode; defaults by language")
     auto_approve_translation: bool = Field(default=False, description="Skip the translation review gate for this page")
+    local_only: bool = Field(default=True, description="Only local AI models for this page's jobs (checked by default)")
     active: bool = True
 
 
@@ -115,6 +116,7 @@ class Job(BaseModel):
     attempts: int = 0
     locked_by: Optional[str] = None
     translation_approved: bool = False
+    local_only: Optional[bool] = Field(default=None, description="Per-job override of the page's local-only setting; None inherits")
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     source: Optional[SourceVideo] = None
@@ -133,6 +135,7 @@ class CreateJobFromUrlRequest(BaseModel):
     page_id: Optional[int] = None
     mode: str = Field(default=DEFAULT_LOCALIZATION_MODE, pattern="^(subtitles|dub)$")
     force: bool = Field(default=False, description="Create even if the source was already used")
+    local_only: Optional[bool] = Field(default=None, description="Override the page's local-only setting for this job")
 
 
 class UpdateJobStatusRequest(BaseModel):
@@ -143,6 +146,10 @@ class UpdateJobStatusRequest(BaseModel):
 
 class AssignPageRequest(BaseModel):
     page_id: int
+
+
+class SetLocalOnlyRequest(BaseModel):
+    local_only: Optional[bool] = Field(description="True = local models only, False = online allowed (when AI_MODE=online), None = inherit from page")
 
 
 class QuotaStatus(BaseModel):
@@ -217,6 +224,7 @@ class TranslatedOnScreenText(BaseModel):
 
 
 class Translation(BaseModel):
+    local: bool = True
     source_language: Optional[str] = None
     target_language: str
     page_id: int

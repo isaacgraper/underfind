@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -20,4 +21,10 @@ if __name__ == "__main__":
         cli_main()
     else:
         # Default: start the web engine & FastAPI server on http://localhost:8000
+        # `python app.py --online` unlocks online AI models; `--local` (or nothing) keeps every model local.
+        if "--online" in sys.argv[1:]:
+            os.environ["AI_MODE"] = "online"
+        elif "--local" in sys.argv[1:]:
+            os.environ["AI_MODE"] = "local"
+
         start()

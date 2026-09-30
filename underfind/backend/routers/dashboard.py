@@ -15,6 +15,8 @@ from underfind.backend.db.database import CacheManager
 from underfind.backend.dependencies import get_cache_manager
 from underfind.backend.core.logger import logger
 
+from underfind.backend.pipeline.stages import current_ai_mode
+
 router = APIRouter(tags=["Dashboard & Health"])
 
 
@@ -27,6 +29,7 @@ def health_check() -> HealthResponse:
         service=SERVICE_NAME,
         version=SERVICE_VERSION,
         youtube_api_configured=has_key,
+        ai_mode=current_ai_mode(),
     )
 
 

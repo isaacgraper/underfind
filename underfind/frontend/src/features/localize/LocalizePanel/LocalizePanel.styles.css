@@ -1,0 +1,95 @@
+.localize-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.localize-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.localize-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  flex: 1 1 200px;
+}
+
+.localize-label {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+}
+
+.localize-select {
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  border-radius: var(--radius-md, 8px);
+  padding: 0.5rem 0.75rem;
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+
+.localize-select:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.localize-checkbox {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.localize-checkbox input {
+  accent-color: var(--indicator-viral);
+  width: 16px;
+  height: 16px;
+}
+
+.localize-hint {
+  flex-basis: 100%;
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  padding-left: 1.5rem;
+}
+
+.localize-warning {
+  font-size: 0.75rem;
+  color: var(--indicator-blue);
+  background: var(--indicator-blue-bg);
+  border: 1px solid var(--indicator-blue-border);
+  border-radius: var(--radius-md, 8px);
+  padding: 0.5rem 0.75rem;
+  margin: 0;
+}
+
+.localize-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.localize-success {
+  font-size: 0.8rem;
+  color: var(--indicator-viral);
+}
+
+.localize-error {
+  font-size: 0.8rem;
+  color: #ef4444;
+}
+
+.localize-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

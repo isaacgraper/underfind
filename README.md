@@ -66,7 +66,7 @@ found -> downloaded -> transcribed -> translated -> voiced -> rendered -> export
 **Etapas automáticas (worker):**
 - `found -> downloaded`: yt-dlp baixa o vídeo uma vez por origem (`data/sources/{plataforma}_{id}/source.mp4`), atualiza metadados (título, legenda, autor, views, likes, duração), calcula o hash perceptual e descarta o job se for reupload de uma origem já usada em outra plataforma.
 - `downloaded -> transcribed`: faster-whisper gera `transcript.json` (segmentos + palavras com timestamps, idioma detectado); OCR opcional (`poetry install -E ocr`) marca vídeos com texto gravado na tela.
-- `transcribed -> translated` (precisa de página de destino): tradução 100% local e offline (modelos OPUS-MT no CTranslate2, int8 na CPU; português do Brasil usa o modelo `pb` quando disponível e pares sem modelo direto passam pelo inglês), mantendo o glossário de GTA VI intacto, traduzindo a legenda do post e o texto na tela; hashtags vêm do post original + padrões da página. Cada segmento tem um limite de caracteres pela duração (17 car/s legenda, 14 car/s dublagem). Opcional e online: `TRANSLATION_BACKEND=llm` usa modelos de LLM gratuitos (NVIDIA → Atria → OpenRouter) com condensação das linhas longas. Fica aguardando revisão, a menos que a página tenha `auto_approve_translation`.
+- `transcribed -> translated` (precisa de página de destino): tradução 100% local e offline (modelos OPUS-MT no CTranslate2, int8 na CPU; português do Brasil usa o modelo `pb` quando disponível e pares sem modelo direto passam pelo inglês), mantendo o glossário de GTA VI intacto, traduzindo a legenda do post e o texto na tela; hashtags vêm do post original + padrões da página. Cada segmento tem um limite de caracteres pela duração (17 car/s legenda, 14 car/s dublagem). Opcional e online: com o servidor em `--online` e a caixa "Somente IA local" desmarcada na página ou no job, usa modelos de LLM gratuitos (NVIDIA → Atria → OpenRouter) com condensação das linhas longas e vozes edge-tts. Fica aguardando revisão, a menos que a página tenha `auto_approve_translation`.
 - `translated -> voiced` (após aprovação): legendas estilizadas pelo template (`subs.ass` para gravar no vídeo, `subs.srt` para as plataformas); no modo `dub`, também narração local Piper por segmento, acelerada até 1,35x quando não cabe no tempo e mixada sobre o áudio original abaixado (`dub_audio.wav`).
 - Erros temporários: 3 tentativas com backoff exponencial. Erros permanentes (privado, removido, login exigido): falha imediata. Jobs `failed` voltam para a etapa que falhou via `PATCH /status`.
 
@@ -74,6 +74,8 @@ found -> downloaded -> transcribed -> translated -> voiced -> rendered -> export
 python app.py worker              # worker contínuo (ou PIPELINE_WORKER_ENABLED=true no servidor)
 python app.py run <JOB_ID>        # avança um job até a próxima etapa manual
 python app.py models --translate en:pb es:en en:es --voice pt_BR-faber-medium   # baixa modelos locais uma vez
+python app.py --online            # servidor liberando IA online para páginas/jobs com "Somente IA local" desmarcado (padrão: --local)
+python app.py worker --local      # worker travado em IA local
 ```
 
 Requer ffmpeg no PATH (o pacote `imageio-ffmpeg` fornece um binário como fallback). Instagram e TikTok costumam exigir cookies de login: `YTDLP_COOKIES_FILE`.

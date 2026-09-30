@@ -332,3 +332,60 @@ def test_moving_back_resets_approval(repo: PipelineRepository, tmp_path: Path, c
 
     back = repo.transition(job_id, JobStatus.TRANSCRIBED, note="re-translate")
     assert back.translation_approved is False
+
+
+class NamedTranslator(FakeTranslator):
+    def __init__(self, name: str):
+        super().__init__()
+        self.model = name
+
+
+@pytest.mark.parametrize("ai_mode, page_local, job_override, expected", [
+    ("local", False, False, "local-mt"),
+    ("online", True, None, "local-mt"),
+    ("online", False, None, "online-llm"),
+    ("online", True, False, "online-llm"),
+    ("online", False, True, "local-mt"),
+])
+def test_translation_backend_follows_local_only_settings(repo, tmp_path, clip, ai_mode, page_local, job_override, expected):
+    ctx = StageContext(
+        repo=repo,
+        workspace=Workspace(sources_dir=tmp_path / "sources", jobs_dir=tmp_path / "jobs"),
+        downloader=FakeDownloader(clip),
+        transcriber=FakeTranscriber(),
+        ocr=None,
+        ai_mode=ai_mode,
+    )
+    ctx._backends[("translator", True)] = NamedTranslator("local-mt")
+    ctx._backends[("translator", False)] = NamedTranslator("online-llm")
+    runner = PipelineRunner(ctx, sleep=lambda _: None)
+    page = _page(repo, local_only=page_local)
+    job_id = JobService(repo).open_job_from_url(YT_URL, page_id=page.id, local_only=job_override).id
+
+    job = runner.run_until_blocked(job_id)
+    translation = Translation.model_validate_json(Path(job.artifacts["translation"]).read_text())
+
+    assert translation.model == expected
+    assert translation.local is (expected == "local-mt")
+
+
+def test_local_only_api_and_health(repo: PipelineRepository):
+    app.dependency_overrides[get_pipeline_repo] = lambda: repo
+    client = TestClient(app)
+
+    try:
+        page = client.post("/api/pages", json={"display_name": "GTA VI BR", "handle": "gta6br2", "language": "pt-BR"}).json()
+        assert page["local_only"] is True
+
+        job = client.post("/api/jobs", json={"url": YT_URL, "page_id": page["id"], "local_only": False}).json()
+        assert job["local_only"] is False
+
+        assert client.patch(f"/api/jobs/{job['id']}/local-only", json={"local_only": None}).json()["local_only"] is None
+        assert client.patch(f"/api/jobs/{job['id']}/local-only", json={"local_only": True}).json()["local_only"] is True
+
+        unchecked = client.put(f"/api/pages/{page['id']}", json={**page, "local_only": False}).json()
+        assert unchecked["local_only"] is False
+
+        assert client.get("/api/health").json()["ai_mode"] == "local"
+    finally:
+        app.dependency_overrides.clear()

@@ -17,6 +17,7 @@ from underfind.backend.schemas.pipeline import (
     JobEvent,
     JobStatus,
     RunJobRequest,
+    SetLocalOnlyRequest,
     Transcript,
     Translation,
     UpdateJobStatusRequest,
@@ -35,7 +36,7 @@ def create_job_from_url(
 ) -> Job:
     """Opens a localization job from a YouTube, Instagram or TikTok video URL."""
     logger.debug("API POST /api/jobs url='%s' page=%s mode=%s", req.url, req.page_id, req.mode)
-    return JobService(repo).open_job_from_url(req.url, page_id=req.page_id, mode=req.mode, force=req.force)
+    return JobService(repo).open_job_from_url(req.url, page_id=req.page_id, mode=req.mode, force=req.force, local_only=req.local_only)
 
 
 @router.post("/jobs/from-video", response_model=Job)
@@ -44,12 +45,13 @@ def create_job_from_video(
     page_id: Optional[int] = Query(None),
     mode: str = Query("subtitles", pattern="^(subtitles|dub)$"),
     force: bool = Query(False),
+    local_only: Optional[bool] = Query(None, description="Override the page's local-only setting for this job"),
     repo: PipelineRepository = Depends(get_pipeline_repo),
 ) -> Job:
     """Opens a localization job from a search/trending result, keeping its YouTube metadata."""
-    logger.debug("API POST /api/jobs/from-video video=%s page=%s", video.video_id, page_id)
+    logger.debug("API POST /api/jobs/from-video video=%s page=%s local_only=%s", video.video_id, page_id, local_only)
     service = JobService(repo)
-    return service.open_job(service.source_from_video_item(video), page_id=page_id, mode=mode, force=force)
+    return service.open_job(service.source_from_video_item(video), page_id=page_id, mode=mode, force=force, local_only=local_only)
 
 
 @router.get("/jobs", response_model=List[Job])
@@ -105,6 +107,16 @@ def assign_job_page(
     repo: PipelineRepository = Depends(get_pipeline_repo),
 ) -> Job:
     return repo.assign_page(job_id, req.page_id)
+
+
+@router.patch("/jobs/{job_id}/local-only", response_model=Job)
+def set_job_local_only(
+    job_id: str,
+    req: SetLocalOnlyRequest,
+    repo: PipelineRepository = Depends(get_pipeline_repo),
+) -> Job:
+    """Per-job "local only" switch: true/false overrides the page, null inherits it. Online needs AI_MODE=online."""
+    return repo.set_local_only(job_id, req.local_only)
 
 
 @router.post("/jobs/{job_id}/run", status_code=202)

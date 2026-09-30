@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { VideoItem } from '../../../types';
 import { apiClient } from '../../../lib/apiClient';
+import { LocalizePanel } from '../../localize';
 import './VideoModal.styles.css';
 
 export interface VideoModalProps {
@@ -182,6 +183,8 @@ export const VideoModal: React.FC<VideoModalProps> = ({ videoId, onClose, isOpen
                   )}
                 </div>
               </div>
+
+              <LocalizePanel video={video} />
 
               {/* Footer Toolbar */}
               <div className="modal-footer-toolbar">
