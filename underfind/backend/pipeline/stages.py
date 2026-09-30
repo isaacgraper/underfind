@@ -2,21 +2,34 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from PIL import Image
 
-from underfind.backend.core.constants import JOBS_DIR, SOURCES_DIR, PHASH_FRAME_SECONDS
+from underfind.backend.core.constants import BUDGET_TOLERANCE, JOBS_DIR, SOURCES_DIR, PHASH_FRAME_SECONDS
 from underfind.backend.core.errors import DuplicateSourceError, PermanentStageError
 from underfind.backend.core.logger import logger
 from underfind.backend.db.pipeline_repo import PipelineRepository
 from underfind.backend.pipeline.download import YtDlpDownloader, source_updates_from_info
+from underfind.backend.pipeline.dub import EdgeTtsProvider, TtsProvider, default_voice, mix_dub, synthesize_segments
+from underfind.backend.pipeline.glossary import load_glossary
 from underfind.backend.pipeline.media import extract_audio, extract_frame, has_audio_stream, probe_duration
 from underfind.backend.pipeline.ocr import OnScreenTextDetector
 from underfind.backend.pipeline.phash import dhash
+from underfind.backend.pipeline.subtitles import build_cues, write_ass, write_srt
 from underfind.backend.pipeline.transcribe import WhisperTranscriber
-from underfind.backend.schemas.pipeline import Job, Transcript
+from underfind.backend.pipeline.translate import ClaudeTranslator, SegmentInput, TranslationDraft, TranslationInput, segment_budget
+from underfind.backend.schemas.pipeline import (
+    Job,
+    PageProfile,
+    RenderTemplate,
+    Transcript,
+    TranslatedOnScreenText,
+    TranslatedSegment,
+    Translation,
+)
 
 
 @dataclass
@@ -40,6 +53,8 @@ class StageContext:
     downloader: YtDlpDownloader = field(default_factory=YtDlpDownloader)
     transcriber: WhisperTranscriber = field(default_factory=WhisperTranscriber)
     ocr: Optional[OnScreenTextDetector] = field(default_factory=OnScreenTextDetector)
+    translator: ClaudeTranslator = field(default_factory=ClaudeTranslator)
+    tts: TtsProvider = field(default_factory=EdgeTtsProvider)
 
 
 def _require_source(job: Job) -> None:
@@ -128,3 +143,185 @@ def transcribe_stage(
 
     ctx.repo.upsert_source(job.source.model_copy(update={k: v for k, v in updates.items() if v is not None}))
     ctx.repo.set_artifact(job.id, "transcript", str(transcript_path))
+
+
+def _load_transcript(ctx: StageContext, job: Job) -> Transcript:
+    path = ctx.workspace.source_dir(job.source_key) / "transcript.json"
+
+    if not path.exists():
+        raise PermanentStageError(f"Transcript missing at {path}; move the job back to 'downloaded' to re-transcribe.")
+
+    return Transcript.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def _require_page(ctx: StageContext, job: Job) -> PageProfile:
+    page = ctx.repo.get_page(job.page_id) if job.page_id is not None else None
+
+    if page is None:
+        raise PermanentStageError(f"Job {job.id} has no target page; assign one before translating.")
+
+    return page
+
+
+def translation_path(ctx: StageContext, job_id: str) -> Path:
+    return ctx.workspace.job_dir(job_id) / "translation.json"
+
+
+def load_translation(ctx: StageContext, job_id: str) -> Translation:
+    path = translation_path(ctx, job_id)
+
+    if not path.exists():
+        raise PermanentStageError(f"Translation missing at {path}; move the job back to 'transcribed' to re-translate.")
+
+    return Translation.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def save_translation(ctx: StageContext, job_id: str, translation: Translation) -> Path:
+    path = translation_path(ctx, job_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(translation.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def _merge_hashtags(generated: List[str], defaults: List[str]) -> List[str]:
+    merged: List[str] = []
+    seen: set[str] = set()
+
+    for tag in [*defaults, *generated]:
+        clean = "#" + tag.strip().lstrip("#").replace(" ", "")
+
+        if len(clean) > 1 and clean.lower() not in seen:
+            seen.add(clean.lower())
+            merged.append(clean)
+
+    return merged
+
+
+def translate_stage(
+    job: Job,
+    ctx: StageContext,
+) -> None:
+    """
+    transcribed -> translated: timing-budgeted translation of every segment, localized caption, hashtags
+    and on-screen text for the target page. Lines over budget get one condensing pass.
+    The result waits at the review gate unless the page auto-approves.
+    """
+    _require_source(job)
+    page = _require_page(ctx, job)
+    transcript = _load_transcript(ctx, job)
+    glossary = load_glossary()
+
+    inputs = [
+        SegmentInput(index=i, start=s.start, end=s.end, text=s.text, max_chars=segment_budget(s.start, s.end, job.mode))
+        for i, s in enumerate(transcript.segments)
+        if s.text.strip()
+    ]
+    onscreen = [t.text for t in (transcript.onscreen_text or [])]
+    source_caption = job.source.caption or job.source.title or ""
+
+    if not inputs and not onscreen and not source_caption.strip():
+        draft = TranslationDraft(caption="", hashtags=[])
+    else:
+        draft = ctx.translator.translate(TranslationInput(
+            target_language=page.language,
+            source_language=transcript.language,
+            mode=job.mode,
+            segments=inputs,
+            source_caption=source_caption,
+            onscreen_text=onscreen,
+            glossary=glossary,
+        ))
+
+    by_index = {s.index: s.text.strip() for s in draft.segments}
+    missing = [s.index for s in inputs if not by_index.get(s.index)]
+
+    if missing:
+        raise RuntimeError(f"Translation skipped segments {missing}")
+
+    over = [
+        SegmentInput(index=s.index, start=s.start, end=s.end, text=by_index[s.index], max_chars=s.max_chars)
+        for s in inputs
+        if len(by_index[s.index]) > s.max_chars * BUDGET_TOLERANCE
+    ]
+
+    if over:
+        logger.debug("Job %s: %d translated lines over budget; condensing", job.id, len(over))
+
+        for fixed in ctx.translator.shorten(page.language, over, glossary):
+            if fixed.index in by_index and fixed.text.strip():
+                by_index[fixed.index] = fixed.text.strip()
+
+    translation = Translation(
+        source_language=transcript.language,
+        target_language=page.language,
+        page_id=page.id,
+        mode=job.mode,
+        model=getattr(ctx.translator, "model", None),
+        segments=[
+            TranslatedSegment(index=s.index, start=s.start, end=s.end, source_text=s.text, text=by_index[s.index], max_chars=s.max_chars)
+            for s in inputs
+        ],
+        caption=draft.caption.strip(),
+        hashtags=_merge_hashtags(draft.hashtags, page.default_hashtags),
+        onscreen_text=[TranslatedOnScreenText(source=o.source, text=o.text) for o in draft.onscreen_text],
+        approved=page.auto_approve_translation,
+        approved_at=datetime.now(timezone.utc).isoformat() if page.auto_approve_translation else None,
+    )
+
+    path = save_translation(ctx, job.id, translation)
+    ctx.repo.set_artifact(job.id, "translation", str(path))
+    ctx.repo.set_translation_approved(job.id, translation.approved)
+
+
+def _template_for(ctx: StageContext, page: PageProfile) -> RenderTemplate:
+    template = ctx.repo.get_template(page.template_id) if page.template_id is not None else None
+    return template or RenderTemplate(name="default")
+
+
+def voice_stage(
+    job: Job,
+    ctx: StageContext,
+) -> None:
+    """
+    translated -> voiced (after approval): styled subtitles (ASS for burning, SRT for platforms) in every mode;
+    in dub mode also TTS per segment, fitted to its slot and mixed over the ducked original audio.
+    """
+    _require_source(job)
+    page = _require_page(ctx, job)
+    translation = load_translation(ctx, job.id)
+
+    if not translation.approved:
+        raise PermanentStageError("Translation is not approved yet.")
+
+    template = _template_for(ctx, page)
+    job_dir = ctx.workspace.job_dir(job.id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    cues = build_cues(translation.segments, template)
+    ass_path = write_ass(cues, template, job_dir / "subs.ass")
+    srt_path = write_srt(cues, job_dir / "subs.srt")
+    ctx.repo.set_artifact(job.id, "subtitles_ass", str(ass_path))
+    ctx.repo.set_artifact(job.id, "subtitles_srt", str(srt_path))
+
+    if job.mode != "dub":
+        return
+
+    video_path = ctx.workspace.source_dir(job.source_key) / "source.mp4"
+    video_duration = probe_duration(video_path)
+
+    if not video_duration:
+        raise PermanentStageError(f"Source video missing or unreadable at {video_path}.")
+
+    voice = page.tts_voice or default_voice(page.language)
+    clips = synthesize_segments(translation.segments, voice, ctx.tts, job_dir / "dub_clips", video_duration)
+    audio_path = mix_dub(video_path, clips, video_duration, job_dir / "dub_audio.wav")
+
+    report = {
+        "voice": voice,
+        "clips": [
+            {"index": c.index, "start": c.start, "duration": round(c.duration, 3), "speedup": c.speedup}
+            for c in clips
+        ],
+    }
+    (job_dir / "dub.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    ctx.repo.set_artifact(job.id, "dub_audio", str(audio_path))

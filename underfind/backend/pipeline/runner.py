@@ -17,15 +17,38 @@ from underfind.backend.core.constants import (
 from underfind.backend.core.errors import DuplicateSourceError, PermanentStageError
 from underfind.backend.core.logger import logger
 from underfind.backend.db.pipeline_repo import PipelineRepository
-from underfind.backend.pipeline.stages import StageContext, download_stage, transcribe_stage
+from underfind.backend.pipeline.stages import (
+    StageContext,
+    download_stage,
+    transcribe_stage,
+    translate_stage,
+    voice_stage,
+)
 from underfind.backend.schemas.pipeline import Job, JobStatus
 
 StageHandler = Callable[[Job, StageContext], None]
+ReadyCheck = Callable[[Job], bool]
 
-# current status -> (status after success, handler). Stages without a handler (review gates, later phases) stop the run.
-STAGE_HANDLERS: Dict[JobStatus, Tuple[JobStatus, StageHandler]] = {
-    JobStatus.FOUND: (JobStatus.DOWNLOADED, download_stage),
-    JobStatus.DOWNLOADED: (JobStatus.TRANSCRIBED, transcribe_stage),
+
+def _always_ready(job: Job) -> bool:
+    return True
+
+
+def _has_page(job: Job) -> bool:
+    return job.page_id is not None
+
+
+def _translation_approved(job: Job) -> bool:
+    return job.translation_approved
+
+
+# current status -> (status after success, handler, gate). A job whose gate is closed waits (review, page assignment);
+# statuses without a handler (later phases) stop the run. Keep gates in sync with PipelineRepository.list_runnable_job_ids.
+STAGE_HANDLERS: Dict[JobStatus, Tuple[JobStatus, StageHandler, ReadyCheck]] = {
+    JobStatus.FOUND: (JobStatus.DOWNLOADED, download_stage, _always_ready),
+    JobStatus.DOWNLOADED: (JobStatus.TRANSCRIBED, transcribe_stage, _always_ready),
+    JobStatus.TRANSCRIBED: (JobStatus.TRANSLATED, translate_stage, _has_page),
+    JobStatus.TRANSLATED: (JobStatus.VOICED, voice_stage, _translation_approved),
 }
 
 
@@ -39,7 +62,7 @@ class PipelineRunner:
     def __init__(
         self,
         ctx: StageContext,
-        handlers: Optional[Dict[JobStatus, Tuple[JobStatus, StageHandler]]] = None,
+        handlers: Optional[Dict[JobStatus, Tuple[JobStatus, StageHandler, ReadyCheck]]] = None,
         max_attempts: int = STAGE_MAX_ATTEMPTS,
         backoff_base: float = STAGE_BACKOFF_BASE_SECONDS,
         sleep: Callable[[float], None] = time.sleep,
@@ -63,11 +86,15 @@ class PipelineRunner:
         if job.status not in self.handlers:
             return job
 
+        target, handler, ready = self.handlers[job.status]
+
+        if not ready(job):
+            logger.debug("Job %s is waiting at '%s' (%s closed)", job_id, job.status.value, ready.__name__)
+            return job
+
         if not self.repo.claim_job(job_id, self.worker_id):
             logger.debug("Job %s is locked by another worker; skipping", job_id)
             return job
-
-        target, handler = self.handlers[job.status]
 
         try:
             self._run_with_retries(job_id, target, handler)

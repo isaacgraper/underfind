@@ -252,6 +252,7 @@ class PipelineRepository:
             notes=row["notes"],
             attempts=row["attempts"] or 0,
             locked_by=row["locked_by"],
+            translation_approved=bool(row["translation_approved"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             source=source,
@@ -363,13 +364,16 @@ class PipelineRepository:
 
         with self._get_connection() as conn:
             # Attempts are kept on failure (how hard the worker tried) and reset when the job moves on or is retried.
+            # Moving back before translation invalidates the approved translation.
+            before_translation = target in PIPELINE_STAGES and PIPELINE_STAGES.index(target) < PIPELINE_STAGES.index(JobStatus.TRANSLATED)
             conn.execute(
                 """
                 UPDATE jobs SET status = ?, failed_from = ?, error = ?, updated_at = ?,
-                    attempts = CASE WHEN ? = 'failed' THEN attempts ELSE 0 END
+                    attempts = CASE WHEN ? = 'failed' THEN attempts ELSE 0 END,
+                    translation_approved = CASE WHEN ? THEN 0 ELSE translation_approved END
                 WHERE id = ?
                 """,
-                (target.value, failed_from, stored_error, now, target.value, job_id)
+                (target.value, failed_from, stored_error, now, target.value, int(before_translation), job_id)
             )
             conn.execute(
                 "INSERT INTO job_events (job_id, from_status, to_status, note, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -443,6 +447,9 @@ class PipelineRepository:
                 SELECT id FROM jobs
                 WHERE status IN ({", ".join("?" for _ in statuses)})
                   AND (locked_by IS NULL OR locked_at < ?)
+                  -- review gates: translation needs a target page, voicing needs an approved translation
+                  AND (status != 'transcribed' OR page_id IS NOT NULL)
+                  AND (status != 'translated' OR translation_approved = 1)
                 ORDER BY updated_at
                 LIMIT ?
                 """,
@@ -450,6 +457,20 @@ class PipelineRepository:
             ).fetchall()
 
         return [r["id"] for r in rows]
+
+    def set_translation_approved(
+        self,
+        job_id: str,
+        approved: bool,
+    ) -> Job:
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE jobs SET translation_approved = ?, updated_at = ? WHERE id = ?",
+                (int(approved), _now(), job_id)
+            )
+            conn.commit()
+
+        return self.get_job(job_id)
 
     def assign_page(
         self,
@@ -537,6 +558,8 @@ class PipelineRepository:
             template_id=row["template_id"],
             default_hashtags=json.loads(row["default_hashtags_json"]) if row["default_hashtags_json"] else [],
             caption_footer=row["caption_footer"],
+            tts_voice=row["tts_voice"],
+            auto_approve_translation=bool(row["auto_approve_translation"]),
             active=bool(row["active"]),
         )
 
@@ -551,7 +574,8 @@ class PipelineRepository:
         now = _now()
         values = (
             page.display_name, page.handle.lstrip("@"), page.avatar_path, page.language, page.template_id,
-            json.dumps(page.default_hashtags), page.caption_footer, int(page.active),
+            json.dumps(page.default_hashtags), page.caption_footer, page.tts_voice,
+            int(page.auto_approve_translation), int(page.active),
         )
 
         with self._get_connection() as conn:
@@ -560,9 +584,10 @@ class PipelineRepository:
                     """
                     INSERT INTO page_profiles (
                         display_name, handle, avatar_path, language, template_id,
-                        default_hashtags_json, caption_footer, active, created_at, updated_at
+                        default_hashtags_json, caption_footer, tts_voice, auto_approve_translation,
+                        active, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (*values, now, now)
                 )
@@ -572,7 +597,8 @@ class PipelineRepository:
                     """
                     UPDATE page_profiles SET
                         display_name = ?, handle = ?, avatar_path = ?, language = ?, template_id = ?,
-                        default_hashtags_json = ?, caption_footer = ?, active = ?, updated_at = ?
+                        default_hashtags_json = ?, caption_footer = ?, tts_voice = ?,
+                        auto_approve_translation = ?, active = ?, updated_at = ?
                     WHERE id = ?
                     """,
                     (*values, now, page.id)

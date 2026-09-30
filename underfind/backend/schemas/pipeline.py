@@ -97,6 +97,8 @@ class PageProfile(BaseModel):
     template_id: Optional[int] = None
     default_hashtags: List[str] = Field(default_factory=list)
     caption_footer: Optional[str] = None
+    tts_voice: Optional[str] = Field(default=None, description="TTS voice for dub mode; defaults by language")
+    auto_approve_translation: bool = Field(default=False, description="Skip the translation review gate for this page")
     active: bool = True
 
 
@@ -112,6 +114,7 @@ class Job(BaseModel):
     notes: Optional[str] = None
     attempts: int = 0
     locked_by: Optional[str] = None
+    translation_approved: bool = False
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     source: Optional[SourceVideo] = None
@@ -193,3 +196,48 @@ class Transcript(BaseModel):
 
 class RunJobRequest(BaseModel):
     until_blocked: bool = Field(default=True, description="Keep advancing until a stage without a handler or a review gate")
+
+
+class TranslatedSegment(BaseModel):
+    index: int
+    start: float
+    end: float
+    source_text: str
+    text: str
+    max_chars: int = Field(description="Length budget so the line can be read (subtitles) or spoken (dub) within the segment")
+
+    @property
+    def over_budget(self) -> bool:
+        return len(self.text) > self.max_chars
+
+
+class TranslatedOnScreenText(BaseModel):
+    source: str
+    text: str
+
+
+class Translation(BaseModel):
+    source_language: Optional[str] = None
+    target_language: str
+    page_id: int
+    mode: str
+    model: Optional[str] = None
+    segments: List[TranslatedSegment] = Field(default_factory=list)
+    caption: str = ""
+    hashtags: List[str] = Field(default_factory=list)
+    onscreen_text: List[TranslatedOnScreenText] = Field(default_factory=list)
+    approved: bool = False
+    approved_at: Optional[str] = None
+    edited: bool = False
+
+
+class SegmentEdit(BaseModel):
+    index: int
+    text: str
+
+
+class UpdateTranslationRequest(BaseModel):
+    segments: Optional[List[SegmentEdit]] = None
+    caption: Optional[str] = None
+    hashtags: Optional[List[str]] = None
+    approve: Optional[bool] = None

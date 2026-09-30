@@ -108,3 +108,34 @@ DEFAULT_WHISPER_COMPUTE_TYPE: str = "int8"
 OCR_SAMPLE_FRAMES: int = 6
 OCR_MIN_CONFIDENCE: float = 0.6
 OCR_MIN_TEXT_LENGTH: int = 3
+
+# Translation (Claude API)
+DEFAULT_TRANSLATION_MODEL: str = "claude-opus-5-5"
+DEFAULT_TRANSLATION_EFFORT: str = "medium"
+TRANSLATION_MAX_TOKENS: int = 16000
+# Characters per second a viewer can read (subtitles) or a TTS voice can speak (dub) comfortably.
+SUBTITLE_CHARS_PER_SECOND: float = 17.0
+DUB_CHARS_PER_SECOND: float = 14.0
+MIN_SEGMENT_CHARS: int = 12
+BUDGET_TOLERANCE: float = 1.15
+
+# Subtitles
+SUBTITLE_MAX_LINES: int = 2
+SUBTITLE_CHAR_WIDTH_RATIO: float = 0.55
+SUBTITLE_SIDE_MARGIN_RATIO: float = 0.06
+
+# Dub (TTS)
+DUB_MAX_SPEEDUP: float = 1.35
+DUB_BACKGROUND_VOLUME: float = 0.12
+DUB_SAMPLE_RATE: int = 44100
+DEFAULT_TTS_VOICES: Dict[str, str] = {
+    "pt": "pt-BR-AntonioNeural",
+    "pt-BR": "pt-BR-AntonioNeural",
+    "pt-PT": "pt-PT-DuarteNeural",
+    "es": "es-MX-JorgeNeural",
+    "es-ES": "es-ES-AlvaroNeural",
+    "en": "en-US-GuyNeural",
+    "fr": "fr-FR-HenriNeural",
+    "de": "de-DE-ConradNeural",
+    "it": "it-IT-DiegoNeural",
+}

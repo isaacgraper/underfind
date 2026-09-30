@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Dict
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
 
-from underfind.backend.core.errors import NotFoundError
+from underfind.backend.core.errors import InvalidTransitionError, NotFoundError
 from underfind.backend.core.logger import logger
 from underfind.backend.db.pipeline_repo import PipelineRepository
 from underfind.backend.dependencies import get_pipeline_repo, get_pipeline_runner
@@ -16,7 +18,9 @@ from underfind.backend.schemas.pipeline import (
     JobStatus,
     RunJobRequest,
     Transcript,
+    Translation,
     UpdateJobStatusRequest,
+    UpdateTranslationRequest,
 )
 from underfind.backend.schemas.video import VideoItem
 from underfind.backend.services.job_service import JobService
@@ -142,3 +146,76 @@ def get_job_transcript(
         raise NotFoundError(f"Job '{job_id}' has no transcript yet (status '{job.status.value}').")
 
     return Transcript.model_validate_json(Path(path).read_text(encoding="utf-8"))
+
+
+def _translation_file(job: Job) -> Path:
+    path = job.artifacts.get("translation")
+
+    if not path or not Path(path).exists():
+        raise NotFoundError(f"Job '{job.id}' has no translation yet (status '{job.status.value}').")
+
+    return Path(path)
+
+
+@router.get("/jobs/{job_id}/translation", response_model=Translation)
+def get_job_translation(
+    job_id: str,
+    repo: PipelineRepository = Depends(get_pipeline_repo),
+) -> Translation:
+    """Source and translated lines side by side, with the localized caption and hashtags, for review."""
+    job = repo.get_job(job_id)
+    return Translation.model_validate_json(_translation_file(job).read_text(encoding="utf-8"))
+
+
+@router.put("/jobs/{job_id}/translation", response_model=Translation)
+def update_job_translation(
+    job_id: str,
+    req: UpdateTranslationRequest,
+    repo: PipelineRepository = Depends(get_pipeline_repo),
+) -> Translation:
+    """Edits translated lines, caption or hashtags while the job waits at review; optionally approves in the same call."""
+    job = repo.get_job(job_id)
+
+    if job.status != JobStatus.TRANSLATED:
+        raise InvalidTransitionError(f"Translation can only be edited while the job is 'translated' (now '{job.status.value}').")
+
+    path = _translation_file(job)
+    translation = Translation.model_validate_json(path.read_text(encoding="utf-8"))
+
+    if req.segments:
+        by_index = {s.index: s for s in translation.segments}
+        unknown = [e.index for e in req.segments if e.index not in by_index]
+
+        if unknown:
+            raise ValueError(f"Unknown segment indexes: {unknown}")
+
+        for edit in req.segments:
+            by_index[edit.index].text = edit.text.strip()
+
+        translation.edited = True
+
+    if req.caption is not None:
+        translation.caption = req.caption.strip()
+        translation.edited = True
+
+    if req.hashtags is not None:
+        translation.hashtags = ["#" + t.strip().lstrip("#") for t in req.hashtags if t.strip().lstrip("#")]
+        translation.edited = True
+
+    if req.approve is not None:
+        translation.approved = req.approve
+        translation.approved_at = datetime.now(timezone.utc).isoformat() if req.approve else None
+
+    path.write_text(json.dumps(translation.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
+    repo.set_translation_approved(job_id, translation.approved)
+    logger.debug("API PUT /api/jobs/%s/translation (approved=%s, edited=%s)", job_id, translation.approved, translation.edited)
+    return translation
+
+
+@router.post("/jobs/{job_id}/translation/approve", response_model=Translation)
+def approve_job_translation(
+    job_id: str,
+    repo: PipelineRepository = Depends(get_pipeline_repo),
+) -> Translation:
+    """Opens the review gate: the worker picks the job up for voicing on its next poll."""
+    return update_job_translation(job_id, UpdateTranslationRequest(approve=True), repo)

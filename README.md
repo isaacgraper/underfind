@@ -60,10 +60,14 @@ found -> downloaded -> transcribed -> translated -> voiced -> rendered -> export
 | `POST /api/jobs/{id}/run` | Executa as etapas automáticas do job em segundo plano |
 | `POST /api/pipeline/tick` | Processa todos os jobs prontos uma vez |
 | `GET /api/jobs/{id}/transcript` | Transcrição com timestamps, idioma e texto na tela |
+| `GET/PUT /api/jobs/{id}/translation` | Revisão: original x tradução por segmento, legenda do post e hashtags (edição) |
+| `POST /api/jobs/{id}/translation/approve` | Aprova a tradução e libera o job para a narração/legendas |
 
 **Etapas automáticas (worker):**
 - `found -> downloaded`: yt-dlp baixa o vídeo uma vez por origem (`data/sources/{plataforma}_{id}/source.mp4`), atualiza metadados (título, legenda, autor, views, likes, duração), calcula o hash perceptual e descarta o job se for reupload de uma origem já usada em outra plataforma.
 - `downloaded -> transcribed`: faster-whisper gera `transcript.json` (segmentos + palavras com timestamps, idioma detectado); OCR opcional (`poetry install -E ocr`) marca vídeos com texto gravado na tela.
+- `transcribed -> translated` (precisa de página de destino): Claude traduz cada segmento dentro de um limite de caracteres calculado pela duração (17 car/s para legenda, 14 car/s para dublagem), mantém o glossário de GTA VI sem tradução, gera legenda do post, hashtags e texto na tela no idioma da página; linhas acima do limite passam por uma segunda rodada de condensação. Fica aguardando revisão, a menos que a página tenha `auto_approve_translation`.
+- `translated -> voiced` (após aprovação): legendas estilizadas pelo template (`subs.ass` para gravar no vídeo, `subs.srt` para as plataformas); no modo `dub`, também narração edge-tts por segmento, acelerada até 1,35x quando não cabe no tempo e mixada sobre o áudio original abaixado (`dub_audio.wav`).
 - Erros temporários: 3 tentativas com backoff exponencial. Erros permanentes (privado, removido, login exigido): falha imediata. Jobs `failed` voltam para a etapa que falhou via `PATCH /status`.
 
 ```bash
@@ -73,7 +77,9 @@ python app.py run <JOB_ID>        # avança um job até a próxima etapa manual
 
 Requer ffmpeg no PATH (o pacote `imageio-ffmpeg` fornece um binário como fallback). Instagram e TikTok costumam exigir cookies de login: `YTDLP_COOKIES_FILE`.
 
-Próximas fases: renderização do template (ffmpeg), exportação com manifest, tradução/dublagem e busca automatizada multi-plataforma.
+Teste real de ponta a ponta (fora de ambientes com rede restrita): `python scripts/smoke_live.py --check` e `python scripts/smoke_live.py <URL> --language pt-BR --mode dub`.
+
+Próximas fases: renderização do template (ffmpeg), exportação com manifest e busca automatizada multi-plataforma.
 
 ---
 

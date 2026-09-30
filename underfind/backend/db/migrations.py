@@ -154,9 +154,22 @@ def _v2_worker_and_media(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE source_videos ADD COLUMN has_onscreen_text INTEGER")
 
 
+def _v3_translation_review(conn: sqlite3.Connection) -> None:
+    """Translation review gate on jobs; TTS voice and auto-approval per page."""
+    if not _column_exists(conn, "jobs", "translation_approved"):
+        conn.execute("ALTER TABLE jobs ADD COLUMN translation_approved INTEGER NOT NULL DEFAULT 0")
+
+    if not _column_exists(conn, "page_profiles", "tts_voice"):
+        conn.execute("ALTER TABLE page_profiles ADD COLUMN tts_voice TEXT")
+
+    if not _column_exists(conn, "page_profiles", "auto_approve_translation"):
+        conn.execute("ALTER TABLE page_profiles ADD COLUMN auto_approve_translation INTEGER NOT NULL DEFAULT 0")
+
+
 MIGRATIONS: List[Tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (1, _v1_localization_pipeline),
     (2, _v2_worker_and_media),
+    (3, _v3_translation_review),
 ]
 
 

@@ -19,8 +19,8 @@ Find international GTA VI reels/shorts, translate them into each target page's l
 | 3 | **Download** | URL → `source.mp4`, audio, metadata, perceptual hash | yt-dlp, ffmpeg | `downloaded` | 3 (done) |
 | 4 | **Transcribe** | audio → timestamped transcript + language, on-screen text flag | faster-whisper, OCR sampling | `transcribed` | 3 (done) |
 | 5 | **Assign page** | job → target page(s) | page profiles | (page set) | done |
-| 6 | **Translate** | transcript → timing-fit translated segments + localized caption/hashtags | LLM + GTA VI glossary (Lucia, Jason, Vice City, Leonida stay untranslated) | `translated` | 4 |
-| 7 | **Voice** | translation → burned subtitles or dubbed track | ASS subtitles / TTS | `voiced` | 4 |
+| 6 | **Translate** | transcript → timing-fit translated segments + localized caption/hashtags | LLM + GTA VI glossary (Lucia, Jason, Vice City, Leonida stay untranslated) | `translated` | 4 (done) |
+| 7 | **Voice** | translation → burned subtitles or dubbed track | ASS subtitles / TTS | `voiced` | 4 (done) |
 | 8 | **Render** | video + page identity → 1080×1920 final | ffmpeg + Pillow (avatar, name, @ on top, video below) | `rendered` | 5 |
 | 9 | **Export** | final → `final.mp4` + `manifest.json` in the export folder | file drop or publisher API | `exported` | 6 |
 | 10 | **Publish** | manifest → post | batch publisher (external) | — | external |
@@ -127,3 +127,24 @@ pages: ["gta6br", "gta6es"]   # auto-assign targets
 | Instaloader | free | profile listing + download | needs a logged-in account, which IG rate-limits/flags |
 | Apify | ~$5/month free credit | Reel/TikTok scrapers with view counts | low volume on free tier |
 | vidIQ (via Claude MCP) | vidIQ plan credits | IG/TikTok outlier search, profile reels | only reachable from a Claude session/routine |
+
+## 4. Pending live verification
+
+Built and covered by automated tests (real ffmpeg on generated clips; mocked network services), but not yet run against the real services because the development environment's network blocks them:
+
+| Step | Service | Blocked host |
+|---|---|---|
+| Download | yt-dlp | www.youtube.com, www.instagram.com, www.tiktok.com |
+| Transcribe | faster-whisper model download | huggingface.co |
+| Translate | Claude API | reachable, but no credential configured |
+| Dub | edge-tts | speech.platform.bing.com |
+
+To verify on a machine with open network access and `ANTHROPIC_API_KEY` set:
+
+```bash
+python scripts/smoke_live.py --check
+python scripts/smoke_live.py "https://www.youtube.com/shorts/<id>" --language pt-BR --mode subtitles
+python scripts/smoke_live.py "https://www.instagram.com/reel/<code>/" --language pt-BR --mode dub --workdir data/smoke
+```
+
+The script uses its own temp database and workspace (never `data/cache.sqlite3`), auto-approves the translation, and prints status, events, artifacts, caption and the first translated lines. Things to check by hand: Instagram/TikTok need `YTDLP_COOKIES_FILE`; Whisper model size vs CPU speed (`WHISPER_MODEL`); dub timing in `data/smoke/jobs/<id>/dub.json` (speedups near 1.35x mean the translation is still too long).
