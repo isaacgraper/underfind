@@ -104,6 +104,7 @@ class RenderTemplate(BaseModel):
     background_color: str = "#000000"
     font_path: Optional[str] = Field(default=None, description="TTF/OTF for headline and brand tag; bundled Anton when empty")
     headline_color: str = "#FFFFFF"
+    headline_uppercase: bool = True
     highlight_colors: List[str] = Field(default_factory=lambda: ["#D946EF", "#FB923C"], description="Gradient for *highlighted* words")
     headline_max_font_size: int = 150
     headline_min_font_size: int = 64
@@ -114,7 +115,7 @@ class RenderTemplate(BaseModel):
     still_seconds: float = Field(default=8.0, ge=2.0, le=60.0, description="Reel length for image posts (per image in carousels)")
     ken_burns_zoom: float = Field(default=1.08, ge=1.0, le=1.5)
     video_fit: str = Field(default="fit", pattern="^(fit|fill)$")
-    subtitle_font: str = "Inter-Bold"
+    subtitle_font: str = "Anton"
     subtitle_font_size: int = 64
     subtitle_color: str = "#FFFFFF"
     subtitle_outline_color: str = "#000000"

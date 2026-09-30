@@ -22,12 +22,24 @@ from underfind.backend.pipeline.glossary import load_glossary
 from underfind.backend.pipeline.media import extract_audio, extract_frame, has_audio_stream, probe_duration
 from underfind.backend.pipeline.ocr import OnScreenTextDetector
 from underfind.backend.pipeline.phash import dhash
+from underfind.backend.pipeline.render import (
+    band_crop,
+    card_overlay,
+    compose_still,
+    concat_reels,
+    place_media,
+    render_card,
+    resolve_layout,
+    still_to_reel,
+    video_to_reel,
+)
 from underfind.backend.pipeline.subtitles import build_cues, write_ass, write_srt
 from underfind.backend.pipeline.transcribe import WhisperTranscriber
 from underfind.backend.pipeline.translate import LLMTranslator, SegmentInput, TranslationDraft, TranslationInput, segment_budget
 from underfind.backend.schemas.pipeline import (
     Headline,
     Job,
+    Layout,
     MediaType,
     Platform,
     PageProfile,
@@ -528,3 +540,131 @@ def voice_stage(
     }
     (job_dir / "dub.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     ctx.repo.set_artifact(job.id, "dub_audio", str(audio_path))
+
+
+def _outputs_dir(ctx: StageContext, job: Job) -> Path:
+    out = ctx.workspace.job_dir(job.id) / "output"
+
+    if out.exists():
+        shutil.rmtree(out)
+
+    out.mkdir(parents=True)
+    return out
+
+
+def render_stage(
+    job: Job,
+    ctx: StageContext,
+) -> None:
+    """
+    voiced -> rendered: the page's outputs in its template.
+      reel      9:16 mp4; videos keep motion (+ burned subtitles, dub audio), images get a slow zoom and the page's
+                audio bed (or silence); carousels play each image in turn
+      post      4:5 jpg of the cover
+      carousel  4:5 jpg per image, the headline card on the cover
+    The headline_card layout crops the source's own headline band and re-types the translated headline under the
+    page's brand tag; letterbox and full_bleed keep the media as is.
+    """
+    _require_source(job)
+    page = _require_page(ctx, job)
+    template = _template_for(ctx, page)
+    translation = load_translation(ctx, job.id)
+    transcript = _load_transcript(ctx, job)
+    src_dir = ctx.workspace.source_dir(job.source_key)
+    media = load_media(src_dir)
+
+    if not media:
+        raise PermanentStageError(f"Source media missing in {src_dir}; move the job back to 'found' to re-download.")
+
+    media_type, files = media
+    cover_path = src_dir / "frame.jpg" if media_type == MediaType.VIDEO else files[0]
+    headline = transcript.headline
+
+    with Image.open(cover_path) as cover_image:
+        cover = cover_image.convert("RGB")
+
+    layout = resolve_layout(template, media_type, headline, translation.headline, cover.size)
+    brand_tag = page.brand_tag or page.handle.upper()
+    out_dir = _outputs_dir(ctx, job)
+    artifacts: dict = {}
+
+    def slide(image: Image.Image, is_cover: bool, canvas: tuple) -> tuple[Image.Image, Optional[Image.Image], Layout]:
+        """Composed still, card overlay (reel use) and layout for one image."""
+        slide_layout = layout if is_cover else (Layout.LETTERBOX if layout == Layout.HEADLINE_CARD else layout)
+
+        if slide_layout == Layout.HEADLINE_CARD:
+            crop = band_crop(image.size, headline)
+            image = image.crop(crop) if crop else image
+            card_h = int(canvas[1] * template.card_ratio)
+            card = render_card(canvas[0], card_h, brand_tag, translation.headline, template)
+            placed_h = place_media(image, slide_layout, canvas, template)[0].size[1]
+            overlay = card_overlay(card, placed_h, canvas, template)
+            return compose_still(image, slide_layout, canvas, template, card), overlay, slide_layout
+
+        return compose_still(image, slide_layout, canvas, template), None, slide_layout
+
+    stills = [cover] if media_type == MediaType.VIDEO else []
+
+    for f in ([] if media_type == MediaType.VIDEO else files):
+        if f.suffix.lower() in VIDEO_SUFFIXES:
+            frame = extract_frame(f, 0.5, out_dir / f"{f.stem}_frame.jpg")
+            with Image.open(frame) as img:
+                stills.append(img.convert("RGB"))
+            frame.unlink(missing_ok=True)
+        else:
+            with Image.open(f) as img:
+                stills.append(img.convert("RGB"))
+
+    post_canvas = (template.width, template.post_height)
+
+    if "post" in page.outputs:
+        composed, _, _ = slide(stills[0], True, post_canvas)
+        path = out_dir / "post.jpg"
+        composed.save(path, quality=95)
+        artifacts["post"] = path
+
+    if "carousel" in page.outputs:
+        for i, image in enumerate(stills, start=1):
+            composed, _, _ = slide(image, i == 1, post_canvas)
+            path = out_dir / f"carousel_{i:02d}.jpg"
+            composed.save(path, quality=95)
+            artifacts[f"carousel_{i:02d}"] = path
+
+    if "reel" in page.outputs:
+        reel_canvas = (template.width, template.height)
+        reel_path = out_dir / "reel.mp4"
+        audio_bed = Path(page.audio_bed_path).expanduser() if page.audio_bed_path else None
+
+        if media_type == MediaType.VIDEO:
+            _, overlay, reel_layout = slide(cover, True, reel_canvas)
+            crop = band_crop(cover.size, headline) if reel_layout == Layout.HEADLINE_CARD else None
+            dub = Path(job.artifacts["dub_audio"]) if job.artifacts.get("dub_audio") else None
+            video_to_reel(files[0], reel_layout, template, reel_path, crop=crop, overlay=overlay,
+                          segments=translation.segments, audio_path=dub)
+        else:
+            parts: List[Path] = []
+
+            for i, image in enumerate(stills):
+                composed, overlay, slide_layout = slide(image, i == 0, reel_canvas)
+                layer = composed if overlay is None else compose_still(
+                    image.crop(band_crop(image.size, headline)) if i == 0 and band_crop(image.size, headline) else image,
+                    slide_layout, reel_canvas, template,
+                )
+                part = out_dir / f"reel_part_{i:02d}.mp4"
+                still_to_reel(layer, overlay, template, part, template.still_seconds, audio_bed)
+                parts.append(part)
+
+            concat_reels(parts, reel_path)
+
+            for part in parts:
+                part.unlink(missing_ok=True)
+
+        artifacts["reel"] = reel_path
+
+    if not artifacts:
+        raise PermanentStageError(f"Page {page.handle} has no outputs configured.")
+
+    for name, path in artifacts.items():
+        ctx.repo.set_artifact(job.id, name, str(path))
+
+    logger.info("Job %s rendered %s (%s layout)", job.id, ", ".join(artifacts), layout.value)

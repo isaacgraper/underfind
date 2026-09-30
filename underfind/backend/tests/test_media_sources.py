@@ -23,6 +23,7 @@ from underfind.backend.pipeline.download import (
 )
 from underfind.backend.pipeline.headline import auto_highlight, clean_ocr_text, detect_headline
 from underfind.backend.pipeline.local_translate import LocalTranslator
+from underfind.backend.pipeline.media import probe_duration
 from underfind.backend.pipeline.runner import PipelineRunner
 from underfind.backend.pipeline.stages import StageContext, Workspace, load_media
 from underfind.backend.pipeline.translate import SegmentInput, TranslationDraft, TranslationInput
@@ -32,6 +33,7 @@ from underfind.backend.schemas.pipeline import (
     OnScreenText,
     PageProfile,
     Platform,
+    RenderTemplate,
     Transcript,
     Translation,
 )
@@ -231,7 +233,11 @@ def _ctx(repo: PipelineRepository, tmp_path: Path, translator=None) -> StageCont
 def test_carousel_from_local_files_to_translated_headline(repo: PipelineRepository, tmp_path: Path):
     cover = _image(tmp_path / "cover.png", "purple", headline=True)
     second = _image(tmp_path / "second.jpg", "orange")
-    page = repo.save_page(PageProfile(display_name="GTA VI BR", handle="gta6br", niche="gta6", auto_approve_translation=True))
+    template = repo.save_template(RenderTemplate(name="fast", still_seconds=2))
+    page = repo.save_page(PageProfile(
+        display_name="GTA VI BR", handle="gta6br", niche="gta6", auto_approve_translation=True,
+        template_id=template.id, outputs=["reel", "post", "carousel"],
+    ))
     translator = HeadlineTranslator()
     runner = PipelineRunner(_ctx(repo, tmp_path, translator), sleep=lambda _: None)
 
@@ -241,7 +247,12 @@ def test_carousel_from_local_files_to_translated_headline(repo: PipelineReposito
     assert job.source.platform == Platform.LOCAL
 
     job = runner.run_until_blocked(job.id)
-    assert job.status == JobStatus.VOICED
+    assert job.status == JobStatus.RENDERED
+    assert probe_duration(Path(job.artifacts["reel"])) == pytest.approx(4.0, abs=0.2)
+    assert {"post", "carousel_01", "carousel_02"} <= set(job.artifacts)
+
+    with Image.open(job.artifacts["post"]) as post:
+        assert post.size == (1080, 1350)
 
     source = repo.get_source(job.source_key)
     assert source.media_type == MediaType.CAROUSEL

@@ -7,7 +7,7 @@ from typing import Callable, List, Optional
 import requests
 
 from underfind.backend.core.constants import DEFAULT_LOCALIZATION_MODE
-from underfind.backend.core.errors import PermanentStageError, SourceAlreadyUsedError
+from underfind.backend.core.errors import SourceAlreadyUsedError
 from underfind.backend.core.logger import logger
 from underfind.backend.core.utils import parse_source_url, is_tiktok_short_link
 from underfind.backend.db.pipeline_repo import PipelineRepository

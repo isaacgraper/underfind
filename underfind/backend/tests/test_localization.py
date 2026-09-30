@@ -280,7 +280,8 @@ def test_review_edit_approve_and_voice_subtitles(repo: PipelineRepository, tmp_p
 
         client.post(f"/api/jobs/{job_id}/run")
         job = client.get(f"/api/jobs/{job_id}").json()
-        assert job["status"] == "voiced"
+        assert job["status"] == "rendered"
+        assert probe_duration(Path(job["artifacts"]["reel"])) == pytest.approx(6.0, abs=0.2)
         assert "dub_audio" not in job["artifacts"]
 
         srt = Path(job["artifacts"]["subtitles_srt"]).read_text()
@@ -300,7 +301,8 @@ def test_auto_approved_dub_page_runs_to_voiced(repo: PipelineRepository, tmp_pat
 
     job = runner.run_until_blocked(job_id)
 
-    assert job.status == JobStatus.VOICED
+    assert job.status == JobStatus.RENDERED
+    assert probe_duration(Path(job.artifacts["reel"])) == pytest.approx(6.0, abs=0.2)
     assert [voice for _, voice in tts.calls] == ["pt_BR-faber-medium"] * 3
     assert probe_duration(Path(job.artifacts["dub_audio"])) == pytest.approx(6.0, abs=0.15)
     assert Path(job.artifacts["subtitles_ass"]).exists()

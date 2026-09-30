@@ -29,7 +29,9 @@ Plataforma de inteligência de conteúdo para garimpar vídeos e Shorts virais, 
 
 ---
 
-## Pipeline de Localização (v2.2, em construção)
+## Pipeline de Modelagem de Posts (v2.2, em construção)
+
+Automação local-first para qualquer nicho: encontra posts internacionais que funcionam (reels, shorts, fotos, carrosséis) e os modela para a sua página: mesma ideia e mídia, no seu idioma, com a sua marca e layout. Formatos de saída: `headline_card` (mídia em cima, cartão preto com a marca entre linhas em degradê e a manchete traduzida com palavras em destaque), `letterbox` (mídia centralizada) e `full_bleed` (vídeo em tela cheia com legendas); como reel 9:16, post 4:5 ou carrossel. Nichos são presets em `config/niches/*.yaml` (GTA VI é o primeiro).
 
 Fluxo completo e automação: [`docs/WORKFLOW.md`](docs/WORKFLOW.md).
 

@@ -1,6 +1,16 @@
-# GTA VI Localization Workflow
+# Post Modeling Workflow
 
-Find international GTA VI reels/shorts, translate them into each target page's language, render them in the "profile picture + name on top, video below" format, and hand the finished files to the batch publisher.
+Local-first automation for any niche: find international posts that work (reels, shorts, photo posts, carousels), model them for your page (same idea and media, your language, your brand tag and layout; not a copy of their branding), render reels / image posts / carousels, and hand the finished files to the batch publisher. GTA VI is the first niche preset (`config/niches/gta6.yaml`); any other niche is a new YAML file.
+
+## 0. Output formats (from the reference posts)
+
+| Layout | When | Look |
+|---|---|---|
+| `headline_card` | source has a headline band (big text across the top or bottom) | source band cropped away; media on top; black card below with the page's brand tag between gradient lines and the translated headline in a condensed font, dates/money/numbers in a gradient (`*highlight*` markup, editable in review) |
+| `letterbox` | memes, infographics, AI art with labels baked in | media centered on black, untouched |
+| `full_bleed` | vertical video (trailers, gameplay) | video fills the frame, translated subtitles burned in, dub audio when enabled |
+
+`auto` (default) picks per post. Each page chooses its outputs: `reel` (9:16 mp4; images get a slow zoom and the page's audio bed or silence, carousels play image by image), `post` (4:5 jpg of the cover), `carousel` (4:5 jpg per image, card on the cover). The profile picture and name above posts are the platform's own interface, not part of the media.
 
 ## 1. The workflow
 

@@ -23,6 +23,7 @@ from underfind.backend.pipeline.stages import (
     transcribe_stage,
     translate_stage,
     voice_stage,
+    render_stage,
 )
 from underfind.backend.schemas.pipeline import Job, JobStatus
 
@@ -49,6 +50,7 @@ STAGE_HANDLERS: Dict[JobStatus, Tuple[JobStatus, StageHandler, ReadyCheck]] = {
     JobStatus.DOWNLOADED: (JobStatus.TRANSCRIBED, transcribe_stage, _always_ready),
     JobStatus.TRANSCRIBED: (JobStatus.TRANSLATED, translate_stage, _has_page),
     JobStatus.TRANSLATED: (JobStatus.VOICED, voice_stage, _translation_approved),
+    JobStatus.VOICED: (JobStatus.RENDERED, render_stage, _always_ready),
 }
 
 
