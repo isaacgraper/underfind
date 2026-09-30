@@ -448,3 +448,36 @@ class YouTubeService:
 
         videos = self._process_video_items(items)
         return videos[0] if videos else None
+
+    def channel_recent_videos(
+        self,
+        channel: str,
+        limit: int = 12,
+    ) -> List[VideoItem]:
+        """
+        Latest uploads of a channel (id "UC..." or "@handle") with full statistics, for ~4 quota units instead of
+        the 100 a search costs: channels.list -> uploads playlist -> playlistItems.list -> videos.list.
+        """
+        svc = self._get_service()
+        lookup = {"forHandle": channel} if channel.startswith("@") else {"id": channel}
+        res = self._execute(svc.channels().list(part="contentDetails", **lookup), "channels.list")
+        items = res.get("items", [])
+
+        if not items:
+            return []
+
+        uploads = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+        playlist = self._execute(
+            svc.playlistItems().list(part="contentDetails", playlistId=uploads, maxResults=min(MAX_ALLOWED_RESULTS, limit)),
+            "playlistItems.list",
+        )
+        video_ids = [i["contentDetails"]["videoId"] for i in playlist.get("items", []) if i.get("contentDetails", {}).get("videoId")]
+
+        if not video_ids:
+            return []
+
+        details = self._execute(
+            svc.videos().list(part="snippet,statistics,contentDetails", id=",".join(video_ids), maxResults=len(video_ids)),
+            "videos.list",
+        )
+        return self._process_video_items(details.get("items", []))

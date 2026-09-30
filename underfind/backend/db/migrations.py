@@ -203,6 +203,37 @@ def _v6_render_review(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE page_profiles ADD COLUMN auto_approve_render INTEGER NOT NULL DEFAULT 0")
 
 
+def _v7_sourcing(conn: sqlite3.Connection) -> None:
+    """Scored candidates per niche and the scan log (also the scheduler's memory of the last scan)."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS candidates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_key TEXT NOT NULL REFERENCES source_videos(source_key),
+            niche TEXT NOT NULL,
+            scanner TEXT NOT NULL,
+            score REAL NOT NULL DEFAULT 0,
+            scores_json TEXT,
+            status TEXT NOT NULL,
+            reason TEXT,
+            job_ids_json TEXT,
+            discovered_at TIMESTAMP,
+            updated_at TIMESTAMP,
+            UNIQUE (source_key, niche)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS scans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            niche TEXT NOT NULL,
+            started_at TIMESTAMP NOT NULL,
+            finished_at TIMESTAMP,
+            report_json TEXT
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_candidates_niche_status ON candidates(niche, status, score DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_scans_niche ON scans(niche, started_at DESC)")
+
+
 MIGRATIONS: List[Tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (1, _v1_localization_pipeline),
     (2, _v2_worker_and_media),
@@ -210,6 +241,7 @@ MIGRATIONS: List[Tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (4, _v4_local_only),
     (5, _v5_media_and_branding),
     (6, _v6_render_review),
+    (7, _v7_sourcing),
 ]
 
 

@@ -37,10 +37,11 @@ async def lifespan(app: FastAPI):
 
     if os.environ.get("PIPELINE_WORKER_ENABLED", "").lower() in ("1", "true", "yes"):
         from underfind.backend.pipeline.runner import get_default_runner
+        from underfind.backend.sourcing.service import get_sourcing_service
 
         worker = threading.Thread(
             target=get_default_runner().run_forever,
-            args=(stop_event,),
+            args=(stop_event, None, get_sourcing_service().run_due_scans),
             name="pipeline-worker",
             daemon=True,
         )

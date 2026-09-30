@@ -88,9 +88,9 @@ The page's `caption_footer` is appended to every caption and fills `{source_auth
 
 | Job | Frequency | What it does |
 |---|---|---|
-| **Seed page scan** | every 2h | Business Discovery pulls latest reels of each watched international GTA page → new `found` jobs |
-| **Keyword scan** | every 4h | YouTube Shorts search over the GTA VI keyword list (~20 searches/day = 2,000 units, well under the 10k quota) |
-| **Outlier discovery** | daily | vidIQ outlier search on IG/TikTok → proposes new pages for the seed list (approved manually) |
+| **Niche scan** | `scan.every_minutes` per niche (worker) | every scanner of the niche runs, posts are scored into the candidates inbox; with `auto_queue` the best become jobs for the niche's pages |
+| **Keyword search** | part of each niche scan | YouTube Shorts search over keywords x regions, `youtube_keyword_searches` per scan (100 units each), rotating pairs across scans |
+| **Outlier discovery** | daily (Claude routine / n8n) | vidIQ outlier search → `POST /api/candidates` (scored like scanned posts); good pages go into the niche's seed list |
 | **Pipeline worker** | continuous | claims jobs and runs each stage until a review gate |
 | **Export** | every worker poll | exports approved `rendered` jobs into the publisher folder (+ webhook) |
 | **Metrics sync** | daily | pulls performance of published posts → adjusts scoring weights |
@@ -150,15 +150,34 @@ pages: ["gta6br", "gta6es"]   # auto-assign targets
 6. The batch publisher picks them up, schedules and posts.
 7. Overnight: metrics sync scores yesterday's posts → ranking adjusts for tomorrow's scans.
 
-## 3. Sourcing options
+## 3. Sourcing
 
-| Tool | Cost | Gives | Limits |
-|---|---|---|---|
-| Instagram Graph API (Business Discovery) | free | recent posts of any public business/creator page by @: caption, permalink, likes, comments, timestamp, media URL | needs own IG professional account + FB page + Meta app token |
-| yt-dlp | free | reliable single Reel/TikTok/Shorts download + metadata | profile listing unreliable on IG, intermittent on TikTok |
-| Instaloader | free | profile listing + download | needs a logged-in account, which IG rate-limits/flags |
-| Apify | ~$5/month free credit | Reel/TikTok scrapers with view counts | low volume on free tier |
-| vidIQ (via Claude MCP) | vidIQ plan credits | IG/TikTok outlier search, profile reels | only reachable from a Claude session/routine |
+Each niche YAML (`config/niches/<name>.yaml`) drives its scans:
+
+```yaml
+seed_pages:
+  instagram: [somepage]        # Graph API Business Discovery (IG_GRAPH_USER_ID + IG_GRAPH_TOKEN), else gallery-dl + cookies
+  tiktok: [someuser]           # yt-dlp flat listing
+  youtube_channels: ["@handle"] # uploads playlist, ~4 quota units per channel
+keywords: {include: [...], exclude: [...]}  # include drives YouTube keyword search and relevance; exclude rejects
+regions: [US, BR]
+scan: {every_minutes: 120, max_age_days: 7, max_duration_seconds: 120, per_source_limit: 12, youtube_keyword_searches: 2}
+scoring: {weights: {velocity: 0.4, ratio: 0.3, engagement: 0.2, relevance: 0.1}, target_views_per_hour: 5000, target_ratio: 10, target_engagement: 0.08, min_score: 60}
+auto_queue: {enabled: false, max_per_scan: 5, mode: subtitles}
+```
+
+| Scanner | Source | Cost / needs |
+|---|---|---|
+| `youtube_keywords` | Shorts search, keywords x regions, rotated across scans | 100 quota units per search; `YOUTUBE_API_KEY` |
+| `youtube_channel:<id>` | latest uploads of a seed channel | ~4 units; `YOUTUBE_API_KEY` |
+| `instagram:<user>` | Business Discovery (official, free) | your professional account id + token; no view counts (estimated from likes) |
+| `instagram:<user>` (fallback) | gallery-dl profile listing | login cookies (`YTDLP_COOKIES_FILE`) |
+| `tiktok:<user>` | yt-dlp flat profile listing | sometimes cookies |
+| `external` | `POST /api/candidates` (vidIQ via Claude routine, n8n, ...) | — |
+
+Scoring (0-100): **velocity** (views per hour since posting), **ratio** (views / followers), **engagement** ((likes + comments) / views) and **relevance** (niche keywords; seed pages and external picks count as relevant), each log-scaled against the niche's targets and weighted. Exclude keywords, age and duration limits, missing keywords (search results only) and scores under `min_score` reject automatically (`auto:` reasons); sources already used by a job are skipped. A rescan refreshes metrics but never undoes a queue or a hand rejection.
+
+Candidates inbox: `GET /api/candidates?niche=gta6` (best first), `POST /api/candidates/{id}/queue` (one job per page of the niche, or chosen pages), `POST /api/candidates/{id}/reject`. CLI: `python app.py scan [niche] [--dry-run]`, `python app.py queue <candidate id> [--page N]`. The worker runs due scans on each poll (`SOURCING_ENABLED=false` turns that off).
 
 ## 4. Pending live verification
 
@@ -215,5 +234,5 @@ Online means: translation through the free LLM chain (NVIDIA → Atria → OpenR
 | 4 | Translate + voice (local by default) | done |
 | 5 | Render: headline card / letterbox / full bleed as reel, post, carousel | done |
 | 6 | Export folder + manifest + webhook, render review gate | done |
-| 7 | Automated sourcing: niche seed pages and keywords, scoring, scheduled scans | next |
-| 8 | Frontend refactor (pipeline board, review screens, pages/templates) + end-to-end tests through the real UI | planned |
+| 7 | Automated sourcing: niche seed pages and keywords, scoring, scheduled scans | done |
+| 8 | Frontend refactor (pipeline board, candidates inbox, review screens, pages/templates) + end-to-end tests through the real UI | next |

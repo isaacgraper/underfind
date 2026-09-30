@@ -6,9 +6,9 @@ keywords:
   include: ["gta 6", "gta vi", "grand theft auto vi", "vice city", "lucia", "jason", "leonida", "rockstar trailer"]
   exclude: ["gta 5", "gta v", "gta online", "mod", "fivem", "roleplay"]
 seed_pages:
-  instagram: []
-  tiktok: []
-  youtube_channels: []
+  instagram: []          # usernames, e.g. [gta6news, gtavileaks]
+  tiktok: []             # usernames without @
+  youtube_channels: []   # channel ids (UC...) or @handles
 regions: ["US", "GB", "ES", "MX", "DE", "FR"]
 hashtags: ["#gta6", "#gtavi"]
 glossary:
@@ -32,3 +32,19 @@ glossary:
   - San Andreas
   - PS5
   - Xbox Series X|S
+scan:
+  every_minutes: 120          # worker scans this niche every 2h (0 = only manual: python app.py scan gta6)
+  max_age_days: 7
+  max_duration_seconds: 120
+  per_source_limit: 12
+  youtube_keyword_searches: 2 # 100 YouTube quota units each
+scoring:
+  weights: {velocity: 0.4, ratio: 0.3, engagement: 0.2, relevance: 0.1}
+  target_views_per_hour: 5000
+  target_ratio: 10
+  target_engagement: 0.08
+  min_score: 60
+auto_queue:
+  enabled: false              # true = best candidates become jobs for every active page with niche: gta6
+  max_per_scan: 5
+  mode: subtitles

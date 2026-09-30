@@ -69,6 +69,9 @@ found -> downloaded -> transcribed -> translated -> voiced -> rendered -> export
 | `POST /api/jobs/{id}/render/approve` | Aprova a renderização e libera a exportação |
 | `GET /api/exports` | Últimas exportações (manifests) |
 | `GET /api/niches` | Presets de nicho |
+| `POST /api/scan/{nicho}` | Varre páginas-semente e palavras-chave do nicho agora (`?dry_run=true` só pontua) |
+| `GET /api/candidates`, `POST /api/candidates` | Caixa de candidatos pontuados / entrada externa (vidIQ, n8n) |
+| `POST /api/candidates/{id}/queue`, `/reject` | Vira job(s) para as páginas do nicho / descarta |
 
 **Etapas automáticas (worker):**
 - `found -> downloaded`: yt-dlp baixa o vídeo uma vez por origem (`data/sources/{plataforma}_{id}/source.mp4`), atualiza metadados (título, legenda, autor, views, likes, duração), calcula o hash perceptual e descarta o job se for reupload de uma origem já usada em outra plataforma.
@@ -84,6 +87,8 @@ python app.py models --translate en:pb es:en en:es --voice pt_BR-faber-medium   
 python app.py --online            # servidor liberando IA online para páginas/jobs com "Somente IA local" desmarcado (padrão: --local)
 python app.py worker --local      # worker travado em IA local
 python app.py approve <JOB_ID> --run   # aprova a revisão pendente (tradução ou renderização) e continua
+python app.py scan gta6 --dry-run      # varre o nicho e mostra os melhores candidatos
+python app.py queue <CANDIDATO_ID>     # candidato -> jobs para as páginas do nicho
 ```
 
 Requer ffmpeg no PATH (o pacote `imageio-ffmpeg` fornece um binário como fallback). Instagram e TikTok costumam exigir cookies de login: `YTDLP_COOKIES_FILE`.

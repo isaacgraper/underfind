@@ -31,3 +31,8 @@ def get_youtube_quota() -> QuotaTracker:
 def get_pipeline_runner():
     from underfind.backend.pipeline.runner import get_default_runner
     return get_default_runner()
+
+
+def get_sourcing_service():
+    from underfind.backend.sourcing.service import get_sourcing_service as build
+    return build()

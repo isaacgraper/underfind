@@ -84,6 +84,7 @@ YOUTUBE_QUOTA_COSTS: Dict[str, int] = {
     "search.list": 100,
     "videos.list": 1,
     "channels.list": 1,
+    "playlistItems.list": 1,
 }
 API_MAX_RETRIES: int = 3
 API_BACKOFF_BASE_SECONDS: float = 1.0

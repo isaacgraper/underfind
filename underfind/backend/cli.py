@@ -219,7 +219,9 @@ def cmd_worker(args: argparse.Namespace) -> None:
     stop_event = threading.Event()
 
     try:
-        get_default_runner().run_forever(stop_event, interval=args.interval)
+        from underfind.backend.sourcing.service import get_sourcing_service
+
+        get_default_runner().run_forever(stop_event, interval=args.interval, on_poll=get_sourcing_service().run_due_scans)
     except KeyboardInterrupt:
         stop_event.set()
 
@@ -300,6 +302,46 @@ def cmd_approve(args: argparse.Namespace) -> None:
         cmd_run(argparse.Namespace(job_id=job.id, once=False))
 
 
+def cmd_scan(args: argparse.Namespace) -> None:
+    """Scans one niche (or every niche) now and prints the best new candidates."""
+    from underfind.backend.core.niches import list_niches
+    from underfind.backend.sourcing.service import get_sourcing_service
+
+    service = get_sourcing_service()
+    niches = [args.niche] if args.niche else list_niches()
+
+    for name in niches:
+        report = service.scan(name, dry_run=args.dry_run)
+        console.print(
+            f"[bold]{name}[/]: {report.found} found, [#10b981]{report.new} new[/], {report.rejected} rejected, "
+            f"{report.skipped} already used, {report.queued} queued" + (" [dim](dry run)[/]" if report.dry_run else "")
+        )
+
+        for scanner, error in report.errors.items():
+            console.print(f"  [#ef4444]{scanner}: {error}[/]")
+
+        if report.top:
+            table = Table(box=box.SIMPLE)
+            for column in ("id", "score", "scanner", "views", "url"):
+                table.add_column(column)
+            for c in report.top:
+                table.add_row(str(c.id or "-"), f"{c.score:.0f}", c.scanner, str(c.source.views or "-") if c.source else "-", c.source.url if c.source else c.source_key)
+            console.print(table)
+
+
+def cmd_queue(args: argparse.Namespace) -> None:
+    from underfind.backend.core.errors import NotFoundError, SourceAlreadyUsedError
+    from underfind.backend.sourcing.service import get_sourcing_service
+
+    try:
+        candidate = get_sourcing_service().queue(args.candidate_id, page_ids=args.page or None, mode=args.mode)
+    except (NotFoundError, SourceAlreadyUsedError, ValueError) as err:
+        console.print(f"[bold #ef4444]{err}[/]")
+        sys.exit(1)
+
+    console.print(f"Candidate {candidate.id} queued as job(s) {', '.join(candidate.job_ids)}")
+
+
 def cmd_models(args: argparse.Namespace) -> None:
     """Pre-downloads local translation models and Piper voices so the pipeline runs fully offline afterwards."""
     from underfind.backend.pipeline.dub import PiperTtsProvider
@@ -328,6 +370,8 @@ DISPATCH: Dict[str, Callable[[argparse.Namespace], None]] = {
     "models": cmd_models,
     "add": cmd_add,
     "approve": cmd_approve,
+    "scan": cmd_scan,
+    "queue": cmd_queue,
 }
 
 
@@ -387,6 +431,15 @@ def main():
     p_approve.add_argument("job_id", help="Job ID")
     p_approve.add_argument("--run", action="store_true", help="Continue the job right after approving")
     _add_ai_mode_flags(p_approve)
+
+    p_scan = subparsers.add_parser("scan", help="Scan a niche's seed pages and keywords for posts worth modeling")
+    p_scan.add_argument("niche", nargs="?", default=None, help="Niche name (default: every niche)")
+    p_scan.add_argument("--dry-run", action="store_true", help="Score and print without saving or queueing")
+
+    p_queue = subparsers.add_parser("queue", help="Turn a scanned candidate into jobs")
+    p_queue.add_argument("candidate_id", type=int)
+    p_queue.add_argument("--page", type=int, action="append", help="Target page ID (repeatable; default: all pages of the niche)")
+    p_queue.add_argument("--mode", choices=["subtitles", "dub"], default="subtitles")
 
     p_models = subparsers.add_parser("models", help="Download local translation models and Piper voices for offline use")
     p_models.add_argument("--translate", nargs="*", metavar="FROM:TO", help="Language pairs, e.g. en:pb es:en en:es")

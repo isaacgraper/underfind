@@ -179,11 +179,19 @@ class PipelineRunner:
         self,
         stop_event: threading.Event,
         interval: Optional[float] = None,
+        on_poll: Optional[Callable[[], object]] = None,
     ) -> None:
+        """Polls until stopped. on_poll runs first on each poll (the sourcing service's due scans)."""
         poll = interval or float(os.environ.get("WORKER_POLL_INTERVAL_SECONDS", WORKER_POLL_INTERVAL_SECONDS))
         logger.info("Pipeline worker %s started (poll every %.0fs)", self.worker_id, poll)
 
         while not stop_event.is_set():
+            if on_poll is not None:
+                try:
+                    on_poll()
+                except Exception as err:
+                    logger.error("Scheduled sourcing crashed: %s", err)
+
             try:
                 self.tick()
             except Exception as err:
